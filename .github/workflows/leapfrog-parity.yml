@@ -5,6 +5,9 @@ on:
     branches:
       - feature/leapfrog-parity
       - feature/automatic-subdomainer
+  pull_request:
+    branches:
+      - feature/leapfrog-parity
   workflow_dispatch:
 
 jobs:
