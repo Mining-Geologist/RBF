@@ -35,4 +35,6 @@ jobs:
       - name: Run parity unit tests
         run: |
           python -m pip install pytest scipy
-          python -m pytest -q python/tests/test_labeled_domain_builder.py
+          python -m pytest -q \
+            python/tests/test_labeled_domain_builder.py \
+            python/tests/test_leapfrog_values.py
