@@ -23,6 +23,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Validate standalone notebook
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("examples/standalone_automatic_lva.ipynb")
+          notebook = json.loads(path.read_text(encoding="utf-8"))
+          for index, cell in enumerate(notebook.get("cells", [])):
+              if cell.get("cell_type") == "code":
+                  compile("".join(cell.get("source", [])), f"{path}:cell-{index}", "exec")
+          print(f"Validated {path}")
+          PY
+
       - name: Install native build tools
         run: |
           sudo apt-get update
