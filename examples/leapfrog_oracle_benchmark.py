@@ -1,8 +1,9 @@
 """Run the WolfPass oracle-label Leapfrog parity benchmark locally.
 
 This script requires the private benchmark files but contains no benchmark data.
-It verifies exact post-cluster construction, fits Polatory, generates an OBJ, and
-prints symmetric surface-distance and volume metrics against Leapfrog.
+It verifies exact value preprocessing and post-cluster construction, fits
+Polatory, generates an OBJ, and prints symmetric surface-distance and volume
+metrics against Leapfrog.
 """
 
 from __future__ import annotations
@@ -64,7 +65,12 @@ def main() -> None:
     parser.add_argument("--reference-result", type=Path)
     parser.add_argument("--output", type=Path, default=Path("polatory_oracle.obj"))
     parser.add_argument("--blend-power", type=float, default=1.0)
-    parser.add_argument("--fit-tolerance", type=float, default=0.028722813232690145)
+    parser.add_argument(
+        "--fit-tolerance",
+        type=float,
+        default=0.0,
+        help="0 uses Leapfrog's automatic 1e-5 * data-bbox diagonal",
+    )
     parser.add_argument("--resolution", type=float, default=25.0)
     args = parser.parse_args()
 
@@ -75,7 +81,15 @@ def main() -> None:
 
     frame = pd.read_csv(args.points)
     points = frame[["xe", "ye", "ze"]].to_numpy(float)
-    values = frame["SDF"].to_numpy(float)
+    indicators = frame["SDF"].to_numpy(float)
+    value_info = polatory.leapfrog_indicator_values3(points, indicators)
+    values = value_info.values
+    fit_tolerance = (
+        value_info.fit_accuracy
+        if args.fit_tolerance == 0.0
+        else args.fit_tolerance
+    )
+
     labels = pd.read_csv(
         args.decoded / args.case / "point_clusters.csv"
     )["cluster"].to_numpy(np.int64)
@@ -109,6 +123,12 @@ def main() -> None:
         if abs(domain.internal_radius - row.internal_radius) > 1e-7:
             raise RuntimeError(f"radius mismatch in cluster {domain.label}")
 
+    print("data_diagonal", value_info.data_diagonal)
+    print("fit_tolerance", fit_tolerance)
+    print("value_clip", value_info.clipping_distance)
+    print("value_min", float(values.min()))
+    print("value_max", float(values.max()))
+
     interpolant = polatory.StructuralInterpolant3(
         model,
         outside_value=-1.0,
@@ -118,7 +138,7 @@ def main() -> None:
         points,
         values,
         domains,
-        tolerance=args.fit_tolerance,
+        tolerance=fit_tolerance,
         max_iter=100,
     )
     predictions = interpolant.evaluate(points)
