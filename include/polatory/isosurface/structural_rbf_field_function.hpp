@@ -18,11 +18,18 @@ class StructuralRbfFieldFunction : public FieldFunction {
       : interpolant_(interpolant), accuracy_(accuracy) {}
 
   VecX operator()(const geometry::Points3& points) const override {
-    return interpolant_.evaluate_impl(points);
+    // The regular Polatory lattice evaluates the field one working batch at a
+    // time and releases old lattice layers. Preparing every local structural
+    // interpolant for the complete model bbox defeats that streaming behavior
+    // and can multiply evaluator memory by the number of structural domains.
+    // Prepare the local evaluators for the current lattice batch instead.
+    return interpolant_.evaluate(points, accuracy_);
   }
 
-  void set_evaluation_bbox(const geometry::Bbox3& bbox) override {
-    interpolant_.set_evaluation_bbox_impl(bbox, accuracy_);
+  void set_evaluation_bbox(const geometry::Bbox3& /*bbox*/) override {
+    // Intentionally deferred to operator(). See the comment above. This keeps
+    // fine-resolution structural meshing on the same bounded-memory path as the
+    // original single-interpolant Polatory workflow.
   }
 
  private:
