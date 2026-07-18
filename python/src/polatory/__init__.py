@@ -5,3 +5,10 @@ from .clustered_domain_builder import (
     ClusteredStructuralDomainBuilder3,
     fit_from_meshes_clustered,
 )
+from .labeled_domain_builder import (
+    LabeledStructuralDomainBuilder3,
+    LabeledStructuralDomainDiagnostics3,
+    LeapfrogLabeledDomainBuilder3,
+    SPHEROIDAL3_C,
+    sample_single_input_anisotropies3,
+)
