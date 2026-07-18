@@ -12,3 +12,7 @@ from .labeled_domain_builder import (
     SPHEROIDAL3_C,
     sample_single_input_anisotropies3,
 )
+from .leapfrog_values import (
+    LeapfrogIndicatorValues3,
+    leapfrog_indicator_values3,
+)
