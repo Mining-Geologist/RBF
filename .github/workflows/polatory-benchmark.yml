@@ -9,6 +9,7 @@ on:
 jobs:
   build-polatory:
     runs-on: windows-latest
+    timeout-minutes: 120
 
     steps:
       - name: Check out repository
@@ -38,6 +39,25 @@ jobs:
         run: |
           python -m pip install . --no-build-isolation --force-reinstall
 
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install scipy pandas pyvista PyQt6
+
       - name: Test Polatory import
         run: |
           python -c "import polatory; print('Polatory imported successfully')"
+
+      - name: Run headless Leapfrog benchmark suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python benchmarks/leapfrog_blending/run_headless_suite.py
+
+      - name: Upload benchmark meshes and metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polatory-leapfrog-benchmark-results
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
