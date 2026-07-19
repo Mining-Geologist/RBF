@@ -4,13 +4,16 @@ The native structural fitting stack is executed in this short-lived interpreter.
 If the native code aborts, only this worker exits; the Qt GUI remains alive and
 reports the child-process exit code.
 
-The user-defined model extent is authoritative. Automatic local structural-domain
-boxes are clipped to that extent, and domains on the outside of the automatic
-domain envelope are extended to the corresponding user-extent face. This prevents
-the blended RBF from stopping at an internal data-derived domain boundary.
+The user-defined model extent is authoritative for the complete structural
+workflow.  The automatic LVA centroid grid is sampled across that extent instead
+of the interpolation-point bounds.  Unpopulated centroid cells are assigned to
+the nearest populated structural domain, and local domain boxes are rebuilt from
+those full-extent regions with an external one-cell blending halo.  The halo is
+used only for stable interpolation weights; meshing and display remain clipped to
+the exact user extent.
 
 Contact-category runs also rebuild each structural domain so every Contact point
-with a non-zero blend weight is included in that domain's support set. This makes
+with a non-zero blend weight is included in that domain's support set.  This makes
 the blended structural field honour Contact == 0 instead of blending in local
 functions that never fitted the contact.
 """
@@ -25,10 +28,11 @@ import sys
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import polatory
+import polatory.automatic_domain_builder as automatic_builder_module
 
 import polatory_lva_pyqt_app_v8_category_contacts as v8
 
@@ -78,39 +82,110 @@ def _domain_specs(domains: list[Any]) -> list[dict[str, Any]]:
     return specs
 
 
-def _apply_user_extent(
+def _fill_unassigned_centroids(
+    centroid_points: np.ndarray,
+    centroid_labels: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Assign every user-extent centroid cell to a populated domain."""
+    centroid_points = np.asarray(centroid_points, dtype=float)
+    labels = np.asarray(centroid_labels, dtype=np.int64).copy()
+    missing = labels < 0
+    missing_count = int(np.count_nonzero(missing))
+    if missing_count == 0:
+        return labels, 0
+
+    populated = ~missing
+    if not np.any(populated):
+        raise RuntimeError(
+            "The automatic SubDomainer produced no populated structural domains."
+        )
+
+    populated_points = centroid_points[populated]
+    populated_labels = labels[populated]
+    query_points = centroid_points[missing]
+
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        nearest = np.empty(len(query_points), dtype=np.int64)
+        best = np.full(len(query_points), np.inf)
+        for start in range(0, len(populated_points), 512):
+            stop = min(start + 512, len(populated_points))
+            difference = (
+                query_points[:, None, :] - populated_points[None, start:stop, :]
+            )
+            squared = np.einsum(
+                "qpi,qpi->qp", difference, difference, optimize=True
+            )
+            local = np.argmin(squared, axis=1)
+            local_squared = squared[np.arange(len(query_points)), local]
+            replace = local_squared < best
+            best[replace] = local_squared[replace]
+            nearest[replace] = start + local[replace]
+    else:
+        nearest = np.asarray(
+            cKDTree(populated_points).query(query_points, k=1)[1],
+            dtype=np.int64,
+        )
+
+    labels[missing] = populated_labels[nearest]
+    return labels, missing_count
+
+
+def _apply_centroid_region_coverage(
     specs: list[dict[str, Any]],
+    centroid_points: np.ndarray,
+    centroid_labels: np.ndarray,
+    shape: tuple[int, int, int],
     user_min: np.ndarray,
     user_max: np.ndarray,
-) -> int:
-    """Make the user extent the outer boundary of all structural-domain coverage."""
+) -> tuple[int, np.ndarray, np.ndarray]:
+    """Cover the full user extent and keep weights positive on its six faces."""
     if not specs:
-        return 0
+        raise RuntimeError("No structural domains were produced.")
 
     user_min = np.asarray(user_min, dtype=float)
     user_max = np.asarray(user_max, dtype=float)
-    domain_min = np.vstack([spec["bbox_min"] for spec in specs]).min(axis=0)
-    domain_max = np.vstack([spec["bbox_max"] for spec in specs]).max(axis=0)
-    diagonal = float(np.linalg.norm(domain_max - domain_min))
-    tolerance = max(1.0e-9 * diagonal, 1.0e-9)
+    span = user_max - user_min
+    shape_array = np.asarray(shape, dtype=float)
+    cell_width = span / np.maximum(shape_array, 1.0)
+    cell_width = np.maximum(cell_width, np.finfo(float).eps)
+
+    # One centroid cell outside the requested extent prevents every local box
+    # weight from becoming exactly zero on the meshing boundary.  Output is still
+    # evaluated and extracted only inside [user_min, user_max].
+    coverage_min = user_min - cell_width
+    coverage_max = user_max + cell_width
+    half_cell = 0.5 * cell_width
+    overlap = cell_width
+    tolerance = max(1.0e-9 * float(np.linalg.norm(span)), 1.0e-9)
     changed_faces = 0
 
-    for spec in specs:
+    for label, spec in enumerate(specs):
+        region = np.asarray(centroid_points, dtype=float)[centroid_labels == label]
+        if len(region) == 0:
+            raise RuntimeError(
+                f"Structural domain {label} owns no centroid cells in the user extent."
+            )
+
+        core_min = np.maximum(region.min(axis=0) - half_cell, user_min)
+        core_max = np.minimum(region.max(axis=0) + half_cell, user_max)
+        region_min = core_min - overlap
+        region_max = core_max + overlap
+
+        touches_min = core_min <= user_min + tolerance
+        touches_max = core_max >= user_max - tolerance
+        region_min[touches_min] = coverage_min[touches_min]
+        region_max[touches_max] = coverage_max[touches_max]
+
         old_min = spec["bbox_min"].copy()
         old_max = spec["bbox_max"].copy()
-        new_min = np.maximum(old_min, user_min)
-        new_max = np.minimum(old_max, user_max)
-
-        for axis in range(3):
-            if old_min[axis] <= domain_min[axis] + tolerance:
-                new_min[axis] = user_min[axis]
-            if old_max[axis] >= domain_max[axis] - tolerance:
-                new_max[axis] = user_max[axis]
+        new_min = np.maximum(np.minimum(old_min, region_min), coverage_min)
+        new_max = np.minimum(np.maximum(old_max, region_max), coverage_max)
 
         if not np.all(new_max > new_min):
-            raise ValueError(
-                "The user-defined extent does not overlap every automatic structural "
-                "domain. Expand the extent so it contains all mapped modelling points."
+            raise RuntimeError(
+                f"Structural domain {label} has an invalid full-extent coverage box."
             )
 
         changed_faces += int(np.count_nonzero(np.abs(new_min - old_min) > tolerance))
@@ -118,7 +193,7 @@ def _apply_user_extent(
         spec["bbox_min"] = new_min
         spec["bbox_max"] = new_max
 
-    return changed_faces
+    return changed_faces, coverage_min, coverage_max
 
 
 def _augment_specs_with_contacts(
@@ -126,6 +201,8 @@ def _augment_specs_with_contacts(
     points: np.ndarray,
     contact_points: np.ndarray,
     contact_indices: np.ndarray,
+    coverage_min: np.ndarray,
+    coverage_max: np.ndarray,
 ) -> tuple[int, int]:
     if len(contact_points) == 0:
         return 0, 0
@@ -136,8 +213,6 @@ def _augment_specs_with_contacts(
     diagonal = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
     epsilon = max(1.0e-10 * diagonal, 1.0e-9)
 
-    # A point exactly on every box face has zero blend weight. Expand the nearest
-    # box by a tiny amount, while staying inside the user's authoritative extent.
     for contact in contact_points:
         covered = any(
             bool(
@@ -167,18 +242,15 @@ def _augment_specs_with_contacts(
         selected = specs[best_index]
         selected["bbox_min"] = np.maximum(
             np.minimum(selected["bbox_min"], contact - epsilon),
-            _USER_BBOX_MIN,
+            coverage_min,
         )
         selected["bbox_max"] = np.minimum(
             np.maximum(selected["bbox_max"], contact + epsilon),
-            _USER_BBOX_MAX,
+            coverage_max,
         )
 
     total_added = 0
     active_pairs = 0
-
-    # Every domain that has a positive blend weight at a contact must fit that
-    # same zero constraint. Otherwise the weighted blend is not interpolatory.
     for spec in specs:
         active = _strictly_inside_box(
             contact_points,
@@ -214,30 +286,163 @@ def _rebuild_domains(specs: list[dict[str, Any]]) -> list[Any]:
 
 
 class UserExtentAutomaticBuilder:
-    """Proxy the native builder and enforce user extent plus Contact constraints."""
+    """Automatic SubDomainer whose centroid grid is the exact user extent."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._builder = _ORIGINAL_AUTOMATIC_BUILDER(*args, **kwargs)
 
-    def build_from_inputs(self, points: np.ndarray, *args: Any, **kwargs: Any):
-        domains = list(self._builder.build_from_inputs(points, *args, **kwargs))
-        specs = _domain_specs(domains)
-        changed_faces = _apply_user_extent(
+    def build_from_inputs(
+        self,
+        points: np.ndarray,
+        inputs: Sequence[object],
+        model_parameters: Sequence[float],
+        trend_type: object = polatory.StructuralTrendType.STRONGEST_ALONG_INPUTS,
+    ) -> list[Any]:
+        points = np.asarray(points, dtype=float)
+        inputs = list(inputs)
+        if not inputs:
+            raise ValueError("inputs must not be empty")
+
+        if len(inputs) == 1:
+            non_decaying = trend_type == polatory.StructuralTrendType.NON_DECAYING
+            point_anisotropies = polatory.sample_single_input_anisotropies3(
+                points,
+                inputs[0],
+                non_decaying=non_decaying,
+            )
+        else:
+            samples = polatory.StructuralDomainBuilder3().sample(
+                points,
+                inputs,
+                trend_type,
+            )
+            point_anisotropies = np.asarray(samples.anisotropies, dtype=float)
+
+        minimum = _USER_BBOX_MIN.copy()
+        maximum = _USER_BBOX_MAX.copy()
+        spans = maximum - minimum
+        active_axes = spans > max(float(spans.max()), 1.0) * 1.0e-12
+        if not np.any(active_axes):
+            active_axes[:] = True
+
+        shape = automatic_builder_module._factor_grid_shape(
+            self._builder.centroid_count,
+            spans,
+            active_axes,
+        )
+        centroid_points, _ = automatic_builder_module._grid_centroids(
+            minimum,
+            maximum,
+            shape,
+        )
+
+        if len(inputs) == 1:
+            centroid_anisotropies = polatory.sample_single_input_anisotropies3(
+                centroid_points,
+                inputs[0],
+                non_decaying=trend_type
+                == polatory.StructuralTrendType.NON_DECAYING,
+            )
+        else:
+            centroid_samples = polatory.StructuralDomainBuilder3().sample(
+                centroid_points,
+                inputs,
+                trend_type,
+            )
+            centroid_anisotropies = np.asarray(
+                centroid_samples.anisotropies,
+                dtype=float,
+            )
+
+        (
+            labels,
+            centroid_labels,
+            minimum_points,
+            maximum_points,
+            merge_count,
+        ) = self._builder._automatic_labels(
+            points,
+            centroid_anisotropies,
+            minimum,
+            maximum,
+            shape,
+        )
+
+        postcluster_builder = automatic_builder_module.LabeledStructuralDomainBuilder3(
+            base_range=self._builder.base_range,
+            support_multiplier=self._builder.support_multiplier,
+            minimum_support_points=self._builder.minimum_support_points,
+        )
+        domains = postcluster_builder.build(
+            points,
+            labels,
+            point_anisotropies,
+            model_parameters,
+        )
+        postcluster = tuple(postcluster_builder.diagnostics_ or ())
+
+        filled_centroid_labels, filled_count = _fill_unassigned_centroids(
+            centroid_points,
+            centroid_labels,
+        )
+        specs = _domain_specs(list(domains))
+        changed_faces, coverage_min, coverage_max = _apply_centroid_region_coverage(
             specs,
-            _USER_BBOX_MIN,
-            _USER_BBOX_MAX,
+            centroid_points,
+            filled_centroid_labels,
+            shape,
+            minimum,
+            maximum,
         )
         added, active_pairs = _augment_specs_with_contacts(
             specs,
-            np.asarray(points, dtype=float),
+            points,
             _CONTACT_POINTS,
             _CONTACT_INDICES,
+            coverage_min,
+            coverage_max,
+        )
+        domains = _rebuild_domains(specs)
+
+        self._builder.labels_ = labels.copy()
+        self._builder.centroid_labels_ = filled_centroid_labels.copy()
+        self._builder.centroid_points_ = centroid_points.copy()
+        self._builder.centroid_grid_shape_ = shape
+        self._builder.active_axes_ = active_axes.copy()
+        self._builder.diagnostics_ = (
+            automatic_builder_module.AutomaticStructuralDomainDiagnostics3(
+                labels=labels.copy(),
+                centroid_points=centroid_points.copy(),
+                centroid_labels=filled_centroid_labels.copy(),
+                centroid_grid_shape=shape,
+                active_axes=active_axes.copy(),
+                minimum_points=minimum_points,
+                maximum_points=maximum_points,
+                consistency_threshold=self._builder.consistency_threshold,
+                merge_count=merge_count,
+                final_domain_count=len(domains),
+                postcluster=postcluster,
+            )
         )
 
         print(
             "PROGRESS\t"
-            "Applied the user-defined extent to the structural RBF domain coverage "
-            f"({changed_faces:,} domain faces adjusted).",
+            "Sampled the automatic LVA centroid grid on the exact user-defined "
+            f"extent with shape {shape}.",
+            flush=True,
+        )
+        if filled_count:
+            print(
+                "PROGRESS\t"
+                f"Assigned {filled_count:,} unpopulated centroid cells to their "
+                "nearest populated structural domain.",
+                flush=True,
+            )
+        print(
+            "PROGRESS\t"
+            "Rebuilt structural RBF coverage from the full user-extent centroid "
+            f"regions ({changed_faces:,} domain faces adjusted; one-cell external "
+            "weighting halo).",
             flush=True,
         )
         if len(_CONTACT_POINTS):
@@ -248,7 +453,7 @@ class UserExtentAutomaticBuilder:
                 f"({added:,} added support references).",
                 flush=True,
             )
-        return _rebuild_domains(specs)
+        return domains
 
     @property
     def diagnostics_(self) -> Any:
@@ -282,16 +487,21 @@ def main() -> int:
     _USER_BBOX_MIN = np.asarray(payload["bbox_min"], dtype=float)
     _USER_BBOX_MAX = np.asarray(payload["bbox_max"], dtype=float)
     if _USER_BBOX_MIN.shape != (3,) or _USER_BBOX_MAX.shape != (3,):
-        raise ValueError("The user-defined extent must contain three minima and maxima.")
+        raise ValueError(
+            "The user-defined extent must contain three minima and maxima."
+        )
     if not np.all(_USER_BBOX_MAX > _USER_BBOX_MIN):
-        raise ValueError("Every user-defined extent maximum must exceed its minimum.")
+        raise ValueError(
+            "Every user-defined extent maximum must exceed its minimum."
+        )
 
     tolerance = max(
         1.0e-9 * float(np.linalg.norm(_USER_BBOX_MAX - _USER_BBOX_MIN)),
         1.0e-9,
     )
     outside = np.any(points < _USER_BBOX_MIN - tolerance, axis=1) | np.any(
-        points > _USER_BBOX_MAX + tolerance, axis=1
+        points > _USER_BBOX_MAX + tolerance,
+        axis=1,
     )
     if np.any(outside):
         raise ValueError(
@@ -303,8 +513,6 @@ def main() -> int:
     _CONTACT_INDICES = np.flatnonzero(contact_mask).astype(np.int64)
     _CONTACT_POINTS = points[_CONTACT_INDICES]
 
-    # Always proxy the builder: the user extent is authoritative even when there
-    # are no Contact categories in the current dataset.
     polatory.AutomaticStructuralDomainBuilder3 = UserExtentAutomaticBuilder
 
     holder: dict[str, Any] = {}
@@ -325,8 +533,6 @@ def main() -> int:
         failed=CallbackSignal(failed),
     )
 
-    # v5 names its safe worker entry point ``scalable_worker_run``. Importing
-    # v8 above also installs category-only Contact value preprocessing.
     worker_run = getattr(v8.v5, "scalable_worker_run", None)
     if not callable(worker_run):
         raise RuntimeError(
@@ -347,9 +553,6 @@ def main() -> int:
         return 3
 
     result = holder["result"]
-
-    # ndarray-subclass attributes are not preserved by the default pickle path.
-    # Store the v5 centre-plane dimension explicitly and reconstruct it in v10.
     plane_points = result.get("lva_points")
     plane_dimension = getattr(plane_points, "dimension", None)
     if plane_dimension is not None:
