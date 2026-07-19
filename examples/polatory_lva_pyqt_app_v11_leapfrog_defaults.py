@@ -1,7 +1,7 @@
 """Process-isolated LVA GUI with Leapfrog-style automatic defaults.
 
 The advanced controls remain visible for diagnostics, but the normal workflow is
-to set the structural input, Strength and Trend range.  The recovered defaults are
+to set the structural input, Strength and Trend range. The recovered defaults are
 applied at startup, including blend power 7 for local structural-domain blending.
 
 Run:
@@ -24,14 +24,14 @@ def leapfrog_default_window_init(self: Any) -> None:
     # Defaults recovered from the benchmark workflow. Strength and trend range
     # remain the two normal user-facing structural controls.
     defaults = (
-        ("alignment_strength_spin", 0.0),
+        ("alignment_spin", 0.0),
         ("blend_power_spin", 7.0),
         ("centroid_count_spin", 6000),
-        ("minimum_cluster_fraction_spin", 0.001),
-        ("maximum_cluster_fraction_spin", 0.10),
-        ("consistency_threshold_spin", 0.60),
+        ("minimum_fraction_spin", 0.001),
+        ("maximum_fraction_spin", 0.10),
+        ("consistency_spin", 0.60),
         ("support_multiplier_spin", 5),
-        ("minimum_support_points_spin", 1),
+        ("minimum_support_spin", 1),
     )
     for attribute, value in defaults:
         widget = getattr(self, attribute, None)
