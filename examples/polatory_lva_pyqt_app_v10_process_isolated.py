@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 import polatory
 
+import polatory_lva_pyqt_app_v5_streamed_lva as v5
 import polatory_lva_pyqt_app_v9_rerun_safe as v9
 
 app = v9.app
@@ -55,6 +56,31 @@ def _cleanup_process_files(self: Any, *, keep_obj: bool = False) -> None:
     self._model_process_output_obj = None
     self._model_process_input = None
     self._model_process_result = None
+
+
+def _restore_lva_plane_metadata(result: dict[str, Any]) -> None:
+    """Rebuild v5's ndarray subclass after crossing the pickle boundary."""
+    points = result.get("lva_points")
+    if points is None or isinstance(points, v5.PlanePointArray):
+        return
+
+    dimension = result.pop("lva_plane_dimension", None)
+    if dimension is None:
+        dimensions = result.get("lva_dimensions")
+        if dimensions is not None and len(dimensions) == 3:
+            candidate = int(dimensions[0])
+            if tuple(int(value) for value in dimensions) == (
+                candidate,
+                candidate,
+                candidate,
+            ) and len(points) == 3 * candidate * candidate:
+                dimension = candidate
+
+    if dimension is not None:
+        result["lva_points"] = v5.PlanePointArray(
+            np.asarray(points, dtype=np.float32),
+            int(dimension),
+        )
 
 
 def process_window_init(self: Any) -> None:
@@ -117,7 +143,6 @@ def _process_error(self: Any, error: Any) -> None:
 
 def _process_finished(self: Any, exit_code: int, exit_status: Any) -> None:
     _flush_process_output(self)
-    process = self._model_process
     self._model_process = None
     self.run_button.setEnabled(True)
     self.progress_bar.setRange(0, 1)
@@ -130,6 +155,7 @@ def _process_finished(self: Any, exit_code: int, exit_status: Any) -> None:
         try:
             with result_path.open("rb") as stream:
                 result = pickle.load(stream)
+            _restore_lva_plane_metadata(result)
             _cleanup_process_files(self, keep_obj=True)
             _original_model_finished(self, result)
             v9.show_only_generated_surface(self)
@@ -222,6 +248,7 @@ def process_run_model(self: Any) -> None:
         process.setProcessChannelMode(app.QtCore.QProcess.ProcessChannelMode.MergedChannels)
         environment = app.QtCore.QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONUNBUFFERED", "1")
+        environment.insert("PYTHONIOENCODING", "utf-8")
         process.setProcessEnvironment(environment)
         process.setProgram(sys.executable)
         process.setArguments(
