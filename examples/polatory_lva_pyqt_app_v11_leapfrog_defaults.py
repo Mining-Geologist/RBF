@@ -52,8 +52,8 @@ def leapfrog_default_window_init(self: Any) -> None:
         )
 
     self._log(
-        "Leapfrog-style defaults loaded: automatic SubDomainer, LVA-geodesic "
-        "extent propagation, and blend power 7."
+        "Leapfrog-style defaults loaded: automatic SubDomainer, finite "
+        "support-radius-bounded LVA coverage, and blend power 7."
     )
 
 
