@@ -60,9 +60,16 @@ def main() -> int:
         failed=CallbackSignal(failed),
     )
 
-    # v5 owns the streamed/safe worker implementation; importing v8 above also
-    # installs the categorical Contact value preprocessing in this interpreter.
-    v8.v5.streamed_worker_run(runner)
+    # v5 names its safe worker entry point ``scalable_worker_run``. Importing
+    # v8 above also installs the category-only Contact value preprocessing in
+    # this fresh interpreter before the worker starts.
+    worker_run = getattr(v8.v5, "scalable_worker_run", None)
+    if not callable(worker_run):
+        raise RuntimeError(
+            "The v5 launcher does not expose scalable_worker_run. Pull the full "
+            "examples launcher chain and retry."
+        )
+    worker_run(runner)
 
     if "error" in holder:
         print(holder["error"], file=sys.stderr, flush=True)
