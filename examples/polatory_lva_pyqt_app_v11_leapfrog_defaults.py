@@ -2,7 +2,8 @@
 
 The advanced controls remain visible for diagnostics, but the normal workflow is
 to set the structural input, Strength and Trend range. The recovered defaults are
-applied at startup, including blend power 7 for local structural-domain blending.
+applied at startup. Finite local-domain weights now blend smoothly into the outside
+field, so the neutral blend exponent is 1 rather than the old compensating value 7.
 
 Run:
     python polatory_lva_pyqt_app_v11_leapfrog_defaults.py
@@ -21,11 +22,12 @@ _original_window_init = app.MainWindow.__init__
 def leapfrog_default_window_init(self: Any) -> None:
     _original_window_init(self)
 
-    # Defaults recovered from the benchmark workflow. Strength and trend range
-    # remain the two normal user-facing structural controls.
+    # Strength and trend range remain the two normal user-facing structural
+    # controls. Blend power 1 is the neutral exponent for the recovered smooth
+    # local-domain/outside partition of unity.
     defaults = (
         ("alignment_spin", 0.0),
-        ("blend_power_spin", 7.0),
+        ("blend_power_spin", 1.0),
         ("centroid_count_spin", 6000),
         ("minimum_fraction_spin", 0.001),
         ("maximum_fraction_spin", 0.10),
@@ -47,13 +49,15 @@ def leapfrog_default_window_init(self: Any) -> None:
     blend = getattr(self, "blend_power_spin", None)
     if blend is not None:
         blend.setToolTip(
-            "Leapfrog-style automatic default: 7. Normally leave this unchanged; "
-            "adjust Strength and Trend range for the structural input."
+            "Leapfrog-style automatic default: 1. Finite local-domain influence "
+            "is blended smoothly into the Outside field. Normally leave this "
+            "unchanged and adjust only Strength and Trend range."
         )
 
     self._log(
         "Leapfrog-style defaults loaded: automatic SubDomainer, finite "
-        "support-radius-bounded LVA coverage, and blend power 7."
+        "support-radius-bounded LVA coverage, smooth Outside-field blending, "
+        "and blend power 1."
     )
 
 
