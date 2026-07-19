@@ -31,11 +31,13 @@ class StructuralInterpolant3 {
   explicit StructuralInterpolant3(const Model& base_model,
                                   double outside_value = -1.0,
                                   double blend_power = 1.0,
-                                  double alignment_strength = 0.0)
+                                  double alignment_strength = 0.0,
+                                  bool background_blending = false)
       : base_model_(base_model),
         outside_value_(outside_value),
         blend_power_(blend_power),
-        alignment_strength_(alignment_strength) {
+        alignment_strength_(alignment_strength),
+        background_blending_(background_blending) {
     if (!(blend_power_ > 0.0)) {
       throw std::invalid_argument("blend_power must be positive");
     }
@@ -52,6 +54,8 @@ class StructuralInterpolant3 {
   double blend_power() const { return blend_power_; }
 
   double alignment_strength() const { return alignment_strength_; }
+
+  bool background_blending() const { return background_blending_; }
 
   Index num_domains() const { return static_cast<Index>(domains_.size()); }
 
@@ -120,8 +124,8 @@ class StructuralInterpolant3 {
       local_interpolant->fit(local_points, local_values, tolerance,
                               max_iter, accuracy);
 
-      domains_.push_back(
-          Domain{spec, std::move(local_interpolant), 0.0});
+      domains_.push_back(Domain{spec, std::move(local_interpolant), 0.0,
+                                Bbox::from_points(local_points)});
       bbox_ = bbox_.is_empty() ? spec.bbox()
                                : bbox_.convex_hull(spec.bbox());
     }
@@ -159,7 +163,7 @@ class StructuralInterpolant3 {
       active_weights.reserve(static_cast<std::size_t>(points.rows()));
 
       for (Index i = 0; i < points.rows(); ++i) {
-        auto weight = box_weight(points.row(i), domain.spec.bbox());
+        auto weight = domain_weight(points.row(i), domain);
         if (weight > 0.0) {
           active_indices.push_back(i);
           active_weights.push_back(weight);
@@ -190,7 +194,17 @@ class StructuralInterpolant3 {
 
     VecX result = VecX::Constant(points.rows(), outside_value_);
     for (Index i = 0; i < points.rows(); ++i) {
-      if (denominator(i) > 0.0) {
+      if (!(denominator(i) > 0.0)) {
+        continue;
+      }
+
+      if (background_blending_ && denominator(i) < 1.0) {
+        // Complete the local weights to a partition of unity with the outside
+        // field.  A lone local interpolant therefore fades continuously to the
+        // outside value rather than remaining unchanged until its box face and
+        // jumping abruptly there.
+        result(i) = numerator(i) + (1.0 - denominator(i)) * outside_value_;
+      } else {
         result(i) = numerator(i) / denominator(i);
       }
     }
@@ -214,9 +228,10 @@ class StructuralInterpolant3 {
     DomainSpec3 spec;
     std::unique_ptr<StandardInterpolant> interpolant;
     double offset;
+    Bbox support_bbox;
   };
 
-  double box_weight(const Point& point, const Bbox& bbox) const {
+  double legacy_box_weight(const Point& point, const Bbox& bbox) const {
     if (!bbox.contains(point)) {
       return 0.0;
     }
@@ -238,6 +253,52 @@ class StructuralInterpolant3 {
     }
 
     return std::pow(weight, blend_power_);
+  }
+
+  double support_taper_weight(const Point& point, const Bbox& support_bbox,
+                              const Bbox& outer_bbox) const {
+    if (!outer_bbox.contains(point)) {
+      return 0.0;
+    }
+
+    double weight = 1.0;
+    for (Index axis = 0; axis < 3; ++axis) {
+      auto outer_min = outer_bbox.min()(axis);
+      auto outer_max = outer_bbox.max()(axis);
+      auto support_min = std::clamp(support_bbox.min()(axis),
+                                    outer_min, outer_max);
+      auto support_max = std::clamp(support_bbox.max()(axis),
+                                    outer_min, outer_max);
+
+      double u = 1.0;
+      if (point(axis) < support_min) {
+        auto width = support_min - outer_min;
+        if (!(width > 0.0)) {
+          return 0.0;
+        }
+        u = (point(axis) - outer_min) / width;
+      } else if (point(axis) > support_max) {
+        auto width = outer_max - support_max;
+        if (!(width > 0.0)) {
+          return 0.0;
+        }
+        u = (outer_max - point(axis)) / width;
+      }
+
+      u = std::clamp(u, 0.0, 1.0);
+      auto smooth = u * u * (3.0 - 2.0 * u);
+      weight *= smooth;
+    }
+
+    return std::pow(weight, blend_power_);
+  }
+
+  double domain_weight(const Point& point, const Domain& domain) const {
+    if (background_blending_) {
+      return support_taper_weight(point, domain.support_bbox,
+                                  domain.spec.bbox());
+    }
+    return legacy_box_weight(point, domain.spec.bbox());
   }
 
   static bool overlap_bbox(const Bbox& a, const Bbox& b,
@@ -313,12 +374,12 @@ class StructuralInterpolant3 {
         auto weighted_difference = 0.0;
         auto weight_sum = 0.0;
         for (Index sample_i = 0; sample_i < samples.rows(); ++sample_i) {
-          auto wi = box_weight(
+          auto wi = domain_weight(
               samples.row(sample_i),
-              domains_.at(static_cast<std::size_t>(i)).spec.bbox());
-          auto wj = box_weight(
+              domains_.at(static_cast<std::size_t>(i)));
+          auto wj = domain_weight(
               samples.row(sample_i),
-              domains_.at(static_cast<std::size_t>(j)).spec.bbox());
+              domains_.at(static_cast<std::size_t>(j)));
           auto overlap_weight = std::sqrt(wi * wj);
 
           auto level_distance =
@@ -391,6 +452,7 @@ class StructuralInterpolant3 {
   double outside_value_;
   double blend_power_;
   double alignment_strength_;
+  bool background_blending_;
   bool fitted_{};
   std::vector<Domain> domains_;
   Bbox bbox_;
