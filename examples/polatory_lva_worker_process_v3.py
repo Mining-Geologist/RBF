@@ -1,18 +1,16 @@
-"""Generic LVA-geodesic extent propagation for the isolated v10 worker.
+"""Finite LVA-geodesic domain coverage for the isolated Polatory worker.
 
-The automatic SubDomainer still resolves its populated structural domains from the
-input data, using the recovered 6000-centroid clustering controls.  To extend those
-domains through the user-defined model extent, this worker does *not* use nearest
-Euclidean input points.  Instead it:
+Leapfrog's automatic SubDomainer does not make every local RBF domain active to the
+model boundary.  The synthetic blending benchmarks show that changing only the model
+extent leaves the output unchanged and that the zero surface closes roughly one local
+spheroidal support radius beyond the populated observations.
 
-1. samples the same LVA anisotropy field on the full user-extent centroid grid;
-2. seeds that grid from the populated automatic-domain centroid labels; and
-3. performs deterministic multi-source geodesic propagation on the 26-neighbour
-   grid using ``||delta @ A||`` as edge cost, matching the anisotropic coordinate
-   transform used by the recovered support-selection rule.
-
-This is dataset-independent.  Strength and trend range control the sampled metric;
-outside the trend influence the metric naturally returns to isotropic behaviour.
+This worker therefore keeps the recovered automatic point clustering and the original
+Leapfrog-compatible local boxes, but allows each box to bend through a varying LVA
+field by no more than that domain's recovered internal support radius.  In a constant
+anisotropy field this reduces to the existing analytical box expansion.  Around folds
+it can follow structural continuity without propagating a domain indefinitely through
+the complete user extent.
 """
 
 from __future__ import annotations
@@ -28,10 +26,11 @@ import polatory_lva_worker_process_v2 as v2
 
 
 _ORIGINAL_AUTOMATIC_BUILDER = polatory.AutomaticStructuralDomainBuilder3
+_MAX_PROPAGATION_CELLS = 100_000
 
 
 def _sample_grid_anisotropies(
-    centroid_points: np.ndarray,
+    points: np.ndarray,
     inputs: Sequence[object],
     trend_type: object,
 ) -> np.ndarray:
@@ -39,7 +38,7 @@ def _sample_grid_anisotropies(
     if len(inputs) == 1:
         return np.asarray(
             polatory.sample_single_input_anisotropies3(
-                centroid_points,
+                points,
                 inputs[0],
                 non_decaying=(
                     trend_type == polatory.StructuralTrendType.NON_DECAYING
@@ -49,74 +48,14 @@ def _sample_grid_anisotropies(
         )
 
     samples = polatory.StructuralDomainBuilder3().sample(
-        centroid_points,
+        points,
         inputs,
         trend_type,
     )
     return np.asarray(samples.anisotropies, dtype=float)
 
 
-def _seed_full_grid(
-    centroid_points: np.ndarray,
-    source_centroids: np.ndarray,
-    source_labels: np.ndarray,
-    data_points: np.ndarray,
-    point_labels: np.ndarray,
-    domain_count: int,
-) -> np.ndarray:
-    """Create stable full-grid seeds from automatic domains and their core data."""
-    centroid_points = np.asarray(centroid_points, dtype=float)
-    source_centroids = np.asarray(source_centroids, dtype=float)
-    source_labels = np.asarray(source_labels, dtype=np.int64)
-    data_points = np.asarray(data_points, dtype=float)
-    point_labels = np.asarray(point_labels, dtype=np.int64)
-
-    votes = np.zeros((len(centroid_points), domain_count), dtype=np.int32)
-
-    valid = (source_labels >= 0) & (source_labels < domain_count)
-    if np.any(valid):
-        mapped = v2._nearest_indices(centroid_points, source_centroids[valid])
-        np.add.at(votes, (mapped, source_labels[valid]), 1)
-
-    # Core observations receive a stronger vote so a coarse user-extent grid does
-    # not erase a small but valid automatic domain during source-cell collisions.
-    mapped_points = v2._nearest_indices(centroid_points, data_points)
-    np.add.at(votes, (mapped_points, point_labels), 4)
-
-    totals = votes.sum(axis=1)
-    seeds = np.full(len(centroid_points), -1, dtype=np.int64)
-    seeded = totals > 0
-    seeds[seeded] = np.argmax(votes[seeded], axis=1).astype(np.int64)
-
-    # Guarantee at least one source cell per automatic domain.  This is a general
-    # preservation rule, not a benchmark-specific location or label override.
-    occupied: set[int] = set(int(index) for index in np.flatnonzero(seeded))
-    for label in range(domain_count):
-        if np.any(seeds == label):
-            continue
-        owned = data_points[point_labels == label]
-        if len(owned) == 0:
-            raise RuntimeError(
-                f"Automatic structural domain {label} owns no interpolation points."
-            )
-        centre = owned.mean(axis=0)
-        order = np.argsort(
-            np.sum((centroid_points - centre[None, :]) ** 2, axis=1)
-        )
-        selected = next(
-            (int(index) for index in order if int(index) not in occupied),
-            int(order[0]),
-        )
-        seeds[selected] = label
-        occupied.add(selected)
-
-    return seeds
-
-
-def _grid_neighbours(
-    index: int,
-    shape: tuple[int, int, int],
-):
+def _grid_neighbours(index: int, shape: tuple[int, int, int]):
     nx, ny, nz = (int(value) for value in shape)
     yz = ny * nz
     ix = index // yz
@@ -141,76 +80,186 @@ def _grid_neighbours(
                 yield (xx * ny + yy) * nz + zz
 
 
-def _lva_geodesic_labels(
+def _bounded_geodesic_region(
     centroid_points: np.ndarray,
     anisotropies: np.ndarray,
     shape: tuple[int, int, int],
-    seeds: np.ndarray,
+    seed_indices: np.ndarray,
+    maximum_distance: float,
 ) -> np.ndarray:
-    """Propagate domain labels along low-cost structural continuity directions."""
+    """Return cells within one local support radius of a domain's core points."""
     centroid_points = np.asarray(centroid_points, dtype=float)
     anisotropies = np.asarray(anisotropies, dtype=float)
-    seeds = np.asarray(seeds, dtype=np.int64)
+    seed_indices = np.unique(np.asarray(seed_indices, dtype=np.int64))
+    maximum_distance = float(maximum_distance)
 
     if anisotropies.shape != (len(centroid_points), 3, 3):
-        raise ValueError("Full-extent LVA samples must have shape (n, 3, 3).")
-    if seeds.shape != (len(centroid_points),):
-        raise ValueError("Full-extent seed labels must have shape (n,).")
+        raise ValueError("Propagation LVA samples must have shape (n, 3, 3).")
+    if len(seed_indices) == 0:
+        raise ValueError("Every structural domain needs at least one propagation seed.")
+    if not maximum_distance > 0.0:
+        raise ValueError("Every structural domain needs a positive internal radius.")
 
     distances = np.full(len(centroid_points), np.inf, dtype=float)
-    labels = np.full(len(centroid_points), -1, dtype=np.int64)
-    queue: list[tuple[float, int, int]] = []
-
-    for index in np.flatnonzero(seeds >= 0):
-        label = int(seeds[index])
+    queue: list[tuple[float, int]] = []
+    for index in seed_indices:
+        if index < 0 or index >= len(centroid_points):
+            raise IndexError("A propagation seed is outside the centroid grid.")
         distances[index] = 0.0
-        labels[index] = label
-        heappush(queue, (0.0, label, int(index)))
+        heappush(queue, (0.0, int(index)))
 
-    scale = max(
-        float(np.linalg.norm(centroid_points.max(axis=0) - centroid_points.min(axis=0))),
-        1.0,
-    )
-    tolerance = 1.0e-12 * scale
-
+    tolerance = max(1.0e-12 * maximum_distance, 1.0e-12)
     while queue:
-        current_distance, current_label, current = heappop(queue)
+        current_distance, current = heappop(queue)
         if current_distance > distances[current] + tolerance:
             continue
-        if current_label != labels[current]:
-            continue
+        if current_distance > maximum_distance + tolerance:
+            break
 
         for neighbour in _grid_neighbours(current, shape):
             delta = centroid_points[neighbour] - centroid_points[current]
-            metric = 0.5 * (
-                anisotropies[current] + anisotropies[neighbour]
-            )
+            metric = 0.5 * (anisotropies[current] + anisotropies[neighbour])
             metric = 0.5 * (metric + metric.T)
             step = float(np.linalg.norm(delta @ metric))
             if not np.isfinite(step) or step <= 0.0:
                 step = float(np.linalg.norm(delta))
 
             candidate = current_distance + step
-            better = candidate < distances[neighbour] - tolerance
-            tied = abs(candidate - distances[neighbour]) <= tolerance
-            deterministic_tie = tied and (
-                labels[neighbour] < 0 or current_label < labels[neighbour]
-            )
-            if better or deterministic_tie:
+            if candidate > maximum_distance + tolerance:
+                continue
+            if candidate < distances[neighbour] - tolerance:
                 distances[neighbour] = candidate
-                labels[neighbour] = current_label
-                heappush(queue, (candidate, current_label, int(neighbour)))
+                heappush(queue, (candidate, int(neighbour)))
 
-    if np.any(labels < 0):
-        raise RuntimeError(
-            f"LVA-geodesic propagation left {int(np.count_nonzero(labels < 0)):,} "
-            "centroid cells unassigned."
+    return distances <= maximum_distance + tolerance
+
+
+def _propagation_grid(
+    points: np.ndarray,
+    domains: Sequence[Any],
+    source_shape: tuple[int, int, int],
+) -> tuple[np.ndarray, tuple[int, int, int], np.ndarray]:
+    """Build an extent-independent grid around the recovered finite domain boxes."""
+    specs = v2._domain_specs(domains)
+    minimum = np.min(np.vstack([spec["bbox_min"] for spec in specs]), axis=0)
+    maximum = np.max(np.vstack([spec["bbox_max"] for spec in specs]), axis=0)
+
+    data_min = points.min(axis=0)
+    data_max = points.max(axis=0)
+    data_span = data_max - data_min
+    source_shape_array = np.maximum(np.asarray(source_shape, dtype=np.int64), 1)
+
+    widths = np.zeros(3, dtype=float)
+    valid = (source_shape_array > 1) & (data_span > 0.0)
+    widths[valid] = data_span[valid] / source_shape_array[valid]
+    positive = widths[widths > 0.0]
+    fallback = float(np.median(positive)) if len(positive) else 1.0
+    widths[~valid] = fallback
+    widths = np.maximum(widths, np.finfo(float).eps)
+
+    span = maximum - minimum
+    shape_array = np.maximum(np.ceil(span / widths).astype(np.int64), 1)
+    total = int(np.prod(shape_array, dtype=np.int64))
+    if total > _MAX_PROPAGATION_CELLS:
+        factor = (total / float(_MAX_PROPAGATION_CELLS)) ** (1.0 / 3.0)
+        widths *= factor
+        shape_array = np.maximum(np.ceil(span / widths).astype(np.int64), 1)
+
+    shape = tuple(int(value) for value in shape_array)
+    centroid_points, _ = automatic_builder_module._grid_centroids(
+        minimum,
+        maximum,
+        shape,
+    )
+    cell_width = span / np.maximum(shape_array.astype(float), 1.0)
+    return centroid_points, shape, cell_width
+
+
+def _rebuild_finite_domains(
+    domains: Sequence[Any],
+    points: np.ndarray,
+    point_labels: np.ndarray,
+    centroid_points: np.ndarray,
+    centroid_anisotropies: np.ndarray,
+    shape: tuple[int, int, int],
+    internal_radii: np.ndarray,
+) -> tuple[list[Any], int, int, int]:
+    specs = v2._domain_specs(domains)
+    if len(specs) != len(internal_radii):
+        raise RuntimeError("Automatic domain diagnostics do not match domain count.")
+
+    tolerance = max(
+        1.0e-9 * float(np.linalg.norm(points.max(axis=0) - points.min(axis=0))),
+        1.0e-9,
+    )
+    changed_faces = 0
+
+    for label, (spec, internal_radius) in enumerate(zip(specs, internal_radii)):
+        owned = points[point_labels == label]
+        if len(owned) == 0:
+            raise RuntimeError(f"Automatic structural domain {label} owns no data points.")
+
+        seed_indices = v2._nearest_indices(centroid_points, owned)
+        active = _bounded_geodesic_region(
+            centroid_points,
+            centroid_anisotropies,
+            shape,
+            seed_indices,
+            float(internal_radius),
         )
-    return labels
+        region = centroid_points[active]
+        if len(region) == 0:
+            raise RuntimeError(f"Structural domain {label} has no finite LVA region.")
+
+        old_min = spec["bbox_min"].copy()
+        old_max = spec["bbox_max"].copy()
+
+        # The recovered analytical box remains authoritative in locally constant
+        # fields.  Geodesic cells may enlarge it only where a curved LVA path reaches
+        # farther within the same internal support radius.
+        new_min = np.minimum(old_min, region.min(axis=0))
+        new_max = np.maximum(old_max, region.max(axis=0))
+        if not np.all(new_max > new_min):
+            raise RuntimeError(f"Invalid finite LVA box for structural domain {label}.")
+
+        changed_faces += int(np.count_nonzero(np.abs(new_min - old_min) > tolerance))
+        changed_faces += int(np.count_nonzero(np.abs(new_max - old_max) > tolerance))
+        spec["bbox_min"] = new_min
+        spec["bbox_max"] = new_max
+
+    added_supports = 0
+    active_pairs = 0
+    if len(v2._CONTACT_POINTS):
+        for spec in specs:
+            active = v2._strictly_inside(
+                v2._CONTACT_POINTS,
+                spec["bbox_min"],
+                spec["bbox_max"],
+            )
+            contact_indices = v2._CONTACT_INDICES[active]
+            active_pairs += int(np.count_nonzero(active))
+            original = np.unique(spec["support_indices"])
+            support = np.unique(
+                np.concatenate([original, contact_indices])
+            ).astype(np.int64)
+            added_supports += int(len(support) - len(original))
+            spec["support_indices"] = support
+
+    rebuilt = [
+        polatory.StructuralDomain3(
+            spec["anisotropy"],
+            spec["bbox_min"],
+            spec["bbox_max"],
+            np.asarray(spec["support_indices"], dtype=np.int64).tolist(),
+            spec["model_parameters"],
+        )
+        for spec in specs
+    ]
+    return rebuilt, changed_faces, added_supports, active_pairs
 
 
-class LvaGeodesicUserExtentAutomaticBuilder:
-    """Cluster populated data, then extend domains using the sampled LVA metric."""
+class FiniteLvaGeodesicAutomaticBuilder:
+    """Cluster input points, then curve each finite box by one support radius."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._builder = _ORIGINAL_AUTOMATIC_BUILDER(*args, **kwargs)
@@ -244,33 +293,22 @@ class LvaGeodesicUserExtentAutomaticBuilder:
         if point_labels.shape != (len(points),):
             raise RuntimeError("Automatic SubDomainer did not return one label per point.")
 
-        source_centroids = np.asarray(
-            self._builder.centroid_points_,
+        diagnostics = self._builder.diagnostics_
+        if diagnostics is None:
+            raise RuntimeError("Automatic SubDomainer diagnostics are unavailable.")
+        internal_radii = np.asarray(
+            [item.internal_radius for item in diagnostics.postcluster],
             dtype=float,
         )
-        source_labels = np.asarray(
-            self._builder.centroid_labels_,
-            dtype=np.int64,
-        )
 
-        span = v2._USER_BBOX_MAX - v2._USER_BBOX_MIN
-        active_axes = span > max(float(span.max()), 1.0) * 1.0e-12
-        if not np.any(active_axes):
-            active_axes[:] = True
-        shape = automatic_builder_module._factor_grid_shape(
-            self._builder.centroid_count,
-            span,
-            active_axes,
+        centroid_points, shape, _ = _propagation_grid(
+            points,
+            domains,
+            self._builder.centroid_grid_shape_,
         )
-        centroid_points, _ = automatic_builder_module._grid_centroids(
-            v2._USER_BBOX_MIN,
-            v2._USER_BBOX_MAX,
-            shape,
-        )
-
         print(
-            "PROGRESS\tSampling the structural LVA metric across the exact user "
-            f"extent on centroid grid {shape}…",
+            "PROGRESS\tSampling the structural LVA metric on a finite, "
+            f"extent-independent propagation grid {shape}…",
             flush=True,
         )
         centroid_anisotropies = _sample_grid_anisotropies(
@@ -278,65 +316,26 @@ class LvaGeodesicUserExtentAutomaticBuilder:
             inputs,
             trend_type,
         )
-        seeds = _seed_full_grid(
-            centroid_points,
-            source_centroids,
-            source_labels,
-            points,
-            point_labels,
-            len(domains),
-        )
 
         print(
-            "PROGRESS\tPropagating automatic domains through empty regions along "
-            "LVA structural continuity…",
+            "PROGRESS\tCurving each automatic domain through the LVA field, bounded "
+            "by its recovered local support radius…",
             flush=True,
         )
-        centroid_labels = _lva_geodesic_labels(
+        domains, changed_faces, added, active_pairs = _rebuild_finite_domains(
+            domains,
+            points,
+            point_labels,
             centroid_points,
             centroid_anisotropies,
             shape,
-            seeds,
-        )
-
-        domains, changed_faces, added, active_pairs = (
-            v2._rebuild_full_extent_domains(
-                domains,
-                points,
-                point_labels,
-                centroid_points,
-                centroid_labels,
-                shape,
-            )
-        )
-
-        old_diagnostics = self._builder.diagnostics_
-        if old_diagnostics is None:
-            raise RuntimeError("Automatic SubDomainer diagnostics are unavailable.")
-        self._builder.centroid_points_ = centroid_points.copy()
-        self._builder.centroid_labels_ = centroid_labels.copy()
-        self._builder.centroid_grid_shape_ = shape
-        self._builder.active_axes_ = active_axes.copy()
-        self._builder.diagnostics_ = (
-            automatic_builder_module.AutomaticStructuralDomainDiagnostics3(
-                labels=point_labels.copy(),
-                centroid_points=centroid_points.copy(),
-                centroid_labels=centroid_labels.copy(),
-                centroid_grid_shape=shape,
-                active_axes=active_axes.copy(),
-                minimum_points=old_diagnostics.minimum_points,
-                maximum_points=old_diagnostics.maximum_points,
-                consistency_threshold=old_diagnostics.consistency_threshold,
-                merge_count=old_diagnostics.merge_count,
-                final_domain_count=len(domains),
-                postcluster=old_diagnostics.postcluster,
-            )
+            internal_radii,
         )
 
         print(
-            "PROGRESS\tRebuilt structural RBF coverage from LVA-geodesic full-extent "
-            f"regions ({changed_faces:,} domain faces adjusted; one-cell external "
-            "weighting halo).",
+            "PROGRESS\tBuilt finite LVA-geodesic structural coverage "
+            f"({changed_faces:,} domain faces extended; no domain was propagated "
+            "to the model boundary).",
             flush=True,
         )
         if len(v2._CONTACT_POINTS):
@@ -362,7 +361,7 @@ class LvaGeodesicUserExtentAutomaticBuilder:
 
 
 def main() -> int:
-    v2.FastUserExtentAutomaticBuilder = LvaGeodesicUserExtentAutomaticBuilder
+    v2.FastUserExtentAutomaticBuilder = FiniteLvaGeodesicAutomaticBuilder
     return v2.main()
 
 
