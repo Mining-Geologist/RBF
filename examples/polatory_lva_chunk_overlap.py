@@ -1,9 +1,9 @@
-"""Overlap-and-trim meshing for the process-isolated LVA application.
+"""Overlap-and-own meshing for the process-isolated LVA application.
 
-The native isosurface extractor is evaluated on padded chunks, then every result is
-trimmed back to its unpadded core before the pieces are joined.  This keeps any
-surface generated at a temporary chunk boundary outside the retained region and
-prevents internal flat walls or pinched terminations in the final OBJ.
+The native isosurface extractor is evaluated on padded chunks.  Complete triangles
+are then assigned to exactly one unpadded core by their cell centres.  Unlike a
+geometric clip, this does not cut triangles on the core planes and therefore cannot
+manufacture a new flat wall or pinched termination at a temporary chunk boundary.
 """
 
 from __future__ import annotations
@@ -19,15 +19,28 @@ import polatory
 from polatory import three as p3
 
 
-def _core_bounds(lower: np.ndarray, upper: np.ndarray) -> tuple[float, ...]:
-    return (
-        float(lower[0]),
-        float(upper[0]),
-        float(lower[1]),
-        float(upper[1]),
-        float(lower[2]),
-        float(upper[2]),
-    )
+def _owned_cell_indices(
+    mesh: pv.DataSet,
+    core_lower: np.ndarray,
+    core_upper: np.ndarray,
+    model_upper: np.ndarray,
+    tolerance: float,
+) -> np.ndarray:
+    centres = np.asarray(mesh.cell_centers().points, dtype=float)
+    lower = np.asarray(core_lower, dtype=float)
+    upper = np.asarray(core_upper, dtype=float)
+    model_upper = np.asarray(model_upper, dtype=float)
+
+    owned = np.all(centres >= lower[None, :] - tolerance, axis=1)
+    for axis in range(3):
+        is_last = abs(float(upper[axis] - model_upper[axis])) <= tolerance
+        if is_last:
+            owned &= centres[:, axis] <= upper[axis] + tolerance
+        else:
+            # Half-open ownership makes every overlapping triangle belong to one
+            # core only, while retaining the triangle itself without cutting it.
+            owned &= centres[:, axis] < upper[axis] - tolerance
+    return np.flatnonzero(owned).astype(np.int64)
 
 
 def install_chunk_overlap(safe_module: Any) -> None:
@@ -56,8 +69,6 @@ def install_chunk_overlap(safe_module: Any) -> None:
             resolution_value,
         )
 
-        # Preserve the original single-grid path exactly.  No artificial internal
-        # boundary exists when the complete model is meshed in one native call.
         if plan["chunk_total"] == 1:
             return original(
                 structural,
@@ -100,14 +111,15 @@ def install_chunk_overlap(safe_module: Any) -> None:
         )
         field = polatory.StructuralRbfFieldFunction(structural)
 
-        # Two base cells are sufficient to move the temporary native boundary away
-        # from the retained core, including refined cells adjacent to that boundary.
+        # Keep two complete base cells on each side of a core. The padded chunks
+        # therefore extract the same crossing triangles before ownership is decided.
         padding = 2.0 * resolution_value
+        tolerance = max(1.0e-8 * resolution_value, 1.0e-9)
         progress(
             f"Fine grid: {plan['total']:,} base cells. Processing safely in "
             f"{plan['chunk_total']:,} overlapping chunks "
-            f"{tuple(int(value) for value in plan['chunks'])}; temporary chunk "
-            "faces will be trimmed before joining…"
+            f"{tuple(int(value) for value in plan['chunks'])}; complete triangles "
+            "will be assigned by cell centre without clipping…"
         )
 
         combined: pv.DataSet | None = None
@@ -143,15 +155,17 @@ def install_chunk_overlap(safe_module: Any) -> None:
                 if part.n_points == 0 or part.n_cells == 0:
                     continue
 
-                # Remove everything in the padding collar.  Any cap or flat wall made
-                # at the padded native bbox is therefore discarded rather than merged
-                # into the final model.
-                retained = part.clip_box(
-                    bounds=_core_bounds(core_lower, core_upper),
-                    invert=False,
-                    crinkle=False,
-                    merge_points=True,
+                owned_indices = _owned_cell_indices(
+                    part,
+                    np.asarray(core_lower, dtype=float),
+                    np.asarray(core_upper, dtype=float),
+                    bbox_max_array,
+                    tolerance,
                 )
+                if len(owned_indices) == 0:
+                    continue
+
+                retained = part.extract_cells(owned_indices)
                 retained = retained.extract_surface().triangulate().clean()
                 if retained.n_points == 0 or retained.n_cells == 0:
                     continue
@@ -168,8 +182,8 @@ def install_chunk_overlap(safe_module: Any) -> None:
             )
 
         progress(
-            "Joining trimmed chunk cores and writing the final result without "
-            "temporary chunk-face geometry…"
+            "Joining overlap-owned triangles and writing the final result without "
+            "temporary chunk-plane cuts…"
         )
         safe_module.write_obj(combined, output_obj)
         return plan
