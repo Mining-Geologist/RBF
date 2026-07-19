@@ -2,6 +2,9 @@ name: Polatory benchmark lab
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/automatic-subdomainer
 
 jobs:
   build-polatory:
