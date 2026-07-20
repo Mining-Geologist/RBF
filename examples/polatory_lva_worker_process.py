@@ -21,13 +21,21 @@ def _leapfrog_structural_interpolant(
     outside_value=-1.0,
     blend_power=1.0,
     alignment_strength=0.0,
+    background_blending=True,
 ):
+    """Create the native interpolant while preserving the full constructor API.
+
+    Leapfrog-style isolated runs default to background blending, but callers may
+    still pass the fifth argument either positionally or by keyword.  Keeping the
+    native-compatible signature is important for headless benchmarks and any future
+    non-GUI use of the worker module.
+    """
     return _native_structural_interpolant(
         base_model,
         float(outside_value),
         float(blend_power),
         float(alignment_strength),
-        True,
+        bool(background_blending),
     )
 
 
