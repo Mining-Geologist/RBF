@@ -3,15 +3,15 @@
 The structural-domain implementation lives in ``polatory_lva_worker_process_v3``.
 This entry point enables two corrections used by the Leapfrog-style launcher:
 
-* overlapping chunk extraction without retaining temporary chunk faces;
+* globally aligned scalar-grid surface extraction streamed through shared slabs;
 * smooth completion of finite local-domain weights into the outside field.
 """
 
-from polatory_lva_chunk_overlap import install_chunk_overlap
+from polatory_lva_global_grid import install_global_grid_meshing
 import polatory_lva_worker_process_v3 as worker
 
 
-install_chunk_overlap(worker.v2.v8.v5.v3)
+install_global_grid_meshing(worker.v2.v8.v5.v3)
 
 _native_structural_interpolant = worker.v2.v8.v5.v3.polatory.StructuralInterpolant3
 
