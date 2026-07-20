@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 300
     env:
       POLATORY_BENCHMARK_RESOLUTION: ${{ github.event.inputs.surface_resolution || '10' }}
+      PYTHONPATH: ${{ github.workspace }}\benchmarks\headless_shims
 
     steps:
       - name: Check out repository
