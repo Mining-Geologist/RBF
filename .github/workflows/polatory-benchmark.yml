@@ -79,7 +79,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           LEAPFROG_GOLD_DIR: ${{ github.workspace }}\benchmark-data\leapfrog-benchmark-data-v1
         run: |
-          python benchmarks/leapfrog_gold/run_real_gold_suite.py
+          python benchmarks/leapfrog_gold/run_real_gold_suite_ci.py
 
       - name: Upload benchmark meshes, overlays, and metrics
         if: always()
