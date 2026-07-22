@@ -124,4 +124,6 @@ print(
 )
 
 if __name__ == "__main__":
-    raise SystemExit(diagnostic.main())
+    exit_code = suite.main()
+    diagnostic._write_cross_case_comparison()
+    raise SystemExit(exit_code)
