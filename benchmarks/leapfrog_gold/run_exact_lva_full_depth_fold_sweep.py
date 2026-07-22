@@ -9,6 +9,12 @@ The default CSV mapping matches Fold_dataset.csv:
 - category column: Geology
 - inside -> +1, outside -> -1
 
+By default, the model bounding-box span is five times the combined data/trend
+extent along X, Y and Z, centred on that extent. This prevents generated surfaces
+from being clipped against a tight model box. Override with:
+- POLATORY_FOLD_MODEL_EXTENT_FACTOR=5
+- POLATORY_FOLD_MODEL_PADDING=<absolute padding> or X,Y,Z
+
 All strength/range cases are generated even when no Leapfrog oracle mesh exists.
 """
 from __future__ import annotations
@@ -45,6 +51,13 @@ XYZ_COLUMNS = tuple(
 )
 INSIDE_LABEL = os.environ.get("POLATORY_FOLD_INSIDE_LABEL", "inside").strip().casefold()
 OUTSIDE_LABEL = os.environ.get("POLATORY_FOLD_OUTSIDE_LABEL", "outside").strip().casefold()
+MODEL_EXTENT_FACTOR = float(
+    os.environ.get("POLATORY_FOLD_MODEL_EXTENT_FACTOR", "5")
+)
+if not np.isfinite(MODEL_EXTENT_FACTOR) or MODEL_EXTENT_FACTOR < 1.0:
+    raise ValueError(
+        "POLATORY_FOLD_MODEL_EXTENT_FACTOR must be a finite number >= 1"
+    )
 
 if len(XYZ_COLUMNS) != 3:
     raise ValueError(
@@ -62,19 +75,28 @@ def _required_path(path: Path, variable: str) -> Path:
 
 
 def _parse_padding(spans: np.ndarray) -> np.ndarray:
+    """Return padding on each side of the raw extent.
+
+    An explicit absolute padding keeps the previous behavior. Otherwise the
+    requested extent factor is interpreted as the final box span divided by the
+    raw span, so factor 5 means two raw spans of padding on each side:
+
+        final_span = raw_span + 2 * padding = 5 * raw_span
+    """
     text = os.environ.get("POLATORY_FOLD_MODEL_PADDING", "").strip()
     if not text:
-        return np.maximum(
-            np.full(3, 3.0 * float(suite.SURFACE_RESOLUTION)),
-            0.05 * np.asarray(spans, dtype=np.float64),
+        return 0.5 * (MODEL_EXTENT_FACTOR - 1.0) * np.asarray(
+            spans, dtype=np.float64
         )
 
     values = [float(item.strip()) for item in text.split(",") if item.strip()]
     if len(values) == 1:
         values *= 3
-    if len(values) != 3 or any(value < 0.0 for value in values):
+    if len(values) != 3 or any(
+        not np.isfinite(value) or value < 0.0 for value in values
+    ):
         raise ValueError(
-            "POLATORY_FOLD_MODEL_PADDING must be one non-negative number or X,Y,Z"
+            "POLATORY_FOLD_MODEL_PADDING must be one non-negative finite number or X,Y,Z"
         )
     return np.asarray(values, dtype=np.float64)
 
@@ -118,30 +140,43 @@ def _extent_points(frame: pd.DataFrame, samples: np.ndarray) -> np.ndarray:
     return np.vstack(groups)
 
 
+def _factor_text(value: float) -> str:
+    rounded = round(value)
+    if abs(value - rounded) < 1.0e-12:
+        return str(int(rounded))
+    return f"{value:g}".replace(".", "p")
+
+
 def _configure_paths_and_bounds(
     points: np.ndarray,
     frame: pd.DataFrame,
     trend_vertices: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     extent = np.vstack([_extent_points(frame, points), trend_vertices])
-    minimum = np.min(extent, axis=0)
-    maximum = np.max(extent, axis=0)
-    spans = maximum - minimum
+    raw_minimum = np.min(extent, axis=0)
+    raw_maximum = np.max(extent, axis=0)
+    spans = raw_maximum - raw_minimum
     if np.any(spans <= 0.0):
-        raise ValueError(f"Degenerate model extent: minimum={minimum}, maximum={maximum}")
+        raise ValueError(
+            f"Degenerate model extent: minimum={raw_minimum}, maximum={raw_maximum}"
+        )
 
     padding = _parse_padding(spans)
-    model_min = minimum - padding
-    model_max = maximum + padding
+    model_min = raw_minimum - padding
+    model_max = raw_maximum + padding
 
     suite.MODEL_MIN = model_min
     suite.MODEL_MAX = model_max
     # The confirmed fix reads this module global while each domain is constructed.
     full_depth._MODEL_MIN_Z = float(model_min[2])
 
+    default_output_name = (
+        "fold-exact-lva-full-depth-sweep-"
+        f"{_factor_text(MODEL_EXTENT_FACTOR)}x-extent"
+    )
     output_name = os.environ.get(
         "POLATORY_FOLD_OUTPUT_NAME",
-        "fold-exact-lva-full-depth-sweep",
+        default_output_name,
     ).strip()
     if not output_name:
         raise ValueError("POLATORY_FOLD_OUTPUT_NAME cannot be empty")
@@ -155,7 +190,7 @@ def _configure_paths_and_bounds(
     # Synthetic sweep case references are resolved beneath DATA_DIR. This folder
     # contains no Sx_Ry oracle meshes unless the user deliberately adds them.
     suite.DATA_DIR = DATASET_PATH.parent
-    return model_min, model_max, padding
+    return model_min, model_max, padding, raw_minimum, raw_maximum
 
 
 def main() -> int:
@@ -164,10 +199,12 @@ def main() -> int:
 
     points, indicators, frame = _read_fold_dataset(dataset_path)
     trend_vertices, trend_faces = suite.read_obj(trend_path)
-    model_min, model_max, padding = _configure_paths_and_bounds(
-        points,
-        frame,
-        trend_vertices,
+    model_min, model_max, padding, raw_minimum, raw_maximum = (
+        _configure_paths_and_bounds(
+            points,
+            frame,
+            trend_vertices,
+        )
     )
 
     cases = sweep._sweep_cases()
@@ -183,9 +220,12 @@ def main() -> int:
         "input_points": int(len(points)),
         "inside_points": int(np.count_nonzero(indicators > 0.0)),
         "outside_points": int(np.count_nonzero(indicators < 0.0)),
+        "raw_extent_min": raw_minimum.tolist(),
+        "raw_extent_max": raw_maximum.tolist(),
+        "model_extent_factor": float(MODEL_EXTENT_FACTOR),
         "model_bounds_min": model_min.tolist(),
         "model_bounds_max": model_max.tolist(),
-        "model_padding": padding.tolist(),
+        "model_padding_each_side": padding.tolist(),
         "surface_resolution": float(suite.SURFACE_RESOLUTION),
         "cases": {},
     }
@@ -202,8 +242,14 @@ def main() -> int:
         flush=True,
     )
     print(
-        f"PROGRESS\tModel bounds: min={model_min.tolist()}, "
-        f"max={model_max.tolist()}, padding={padding.tolist()}.",
+        f"PROGRESS\tRaw combined extent: min={raw_minimum.tolist()}, "
+        f"max={raw_maximum.tolist()}.",
+        flush=True,
+    )
+    print(
+        f"PROGRESS\tExpanded model extent: factor={MODEL_EXTENT_FACTOR:g} per axis, "
+        f"min={model_min.tolist()}, max={model_max.tolist()}, "
+        f"padding each side={padding.tolist()}.",
         flush=True,
     )
     print(
