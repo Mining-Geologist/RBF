@@ -1,10 +1,14 @@
 """Run the fold LVA sweep with full-model domains and support-aware components.
 
 The 5x model extent can expose a second zero surface at the finite automatic-domain
-envelope.  This runner keeps the same data, LVA matrices, support memberships and
+envelope. This runner keeps the same data, LVA matrices, support memberships and
 local RBF models, but extends every domain evaluation box to the complete model
-bounds.  After meshing, disconnected components with no nearby input support are
-removed from the primary OBJ while the untouched all-component OBJ is preserved.
+bounds. After meshing, disconnected components with no nearby input support are
+removed from the primary OBJ.
+
+By default only the cleaned, data-supported OBJ is retained. Set
+``POLATORY_FOLD_KEEP_ALL_COMPONENTS=1`` only when the unfiltered diagnostic OBJ is
+also required.
 
 Use the same environment variables as run_exact_lva_full_depth_fold_sweep.py.
 """
@@ -34,6 +38,10 @@ _BASE_DOMAIN_BUILDER = suite.LVA_WORKER.FiniteLvaGeodesicAutomaticBuilder
 _BASE_BUILD_CASE = suite.build_case
 _BASE_GENERATE_ISOSURFACE = suite.SAFE_MESHER.generate_safe_isosurface
 _CURRENT_POINTS: np.ndarray | None = None
+
+_KEEP_ALL_COMPONENTS = os.environ.get(
+    "POLATORY_FOLD_KEEP_ALL_COMPONENTS", "0"
+).strip().casefold() in {"1", "true", "yes", "on"}
 
 
 class _FullModelDomainBuilder:
@@ -129,11 +137,7 @@ def _merge_components(components: list[Any]) -> Any:
 
 
 def _filter_supported_components(output_obj: Path, points: np.ndarray) -> dict[str, Any]:
-    """Keep connected isosurfaces supported by nearby input data.
-
-    The unfiltered OBJ is retained beside the cleaned result with the suffix
-    ``_all_components.obj``.  This makes the cleanup inspectable and reversible.
-    """
+    """Keep connected isosurfaces supported by nearby input data."""
     output_obj = Path(output_obj)
     points = np.asarray(points, dtype=np.float64)
     mesh = suite.pv.read(output_obj).extract_surface().triangulate().clean()
@@ -204,28 +208,35 @@ def _filter_supported_components(output_obj: Path, points: np.ndarray) -> dict[s
         kept_indices = [best]
 
     raw_path = output_obj.with_name(output_obj.stem + "_all_components.obj")
-    shutil.copy2(output_obj, raw_path)
+    if _KEEP_ALL_COMPONENTS:
+        shutil.copy2(output_obj, raw_path)
+    elif raw_path.exists():
+        # Remove a stale diagnostic OBJ from an earlier run in the same folder.
+        raw_path.unlink()
+
     cleaned = _merge_components([components[index] for index in kept_indices])
     cleaned.save(output_obj)
 
     report = {
-        "raw_obj": str(raw_path),
+        "raw_obj": str(raw_path) if _KEEP_ALL_COMPONENTS else None,
         "cleaned_obj": str(output_obj),
         "raw_component_count": int(len(records)),
         "kept_component_count": int(len(kept_indices)),
         "median_input_spacing": float(median_spacing),
         "support_distance": float(threshold),
         "minimum_support_points": int(min_points),
+        "kept_all_components_obj": bool(_KEEP_ALL_COMPONENTS),
         "components": records,
     }
     report_path = output_obj.with_name(output_obj.stem + "_components.json")
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     removed = len(records) - len(kept_indices)
+    extra = f" Raw OBJ: {raw_path.name}" if _KEEP_ALL_COMPONENTS else ""
     print(
         f"PROGRESS\tComponent support filter kept {len(kept_indices)}/{len(records)} "
         f"components and removed {removed}; threshold={threshold:g}, "
-        f"median input spacing={median_spacing:g}. Raw OBJ: {raw_path.name}",
+        f"median input spacing={median_spacing:g}.{extra}",
         flush=True,
     )
     return report
@@ -281,7 +292,12 @@ suite.build_case = _support_aware_build_case
 print(
     "PROGRESS\tFull-model fold correction enabled: all automatic domain boxes span "
     "the model bbox, and disconnected isosurfaces without nearby data support are "
-    "removed from the primary OBJ. Raw all-component OBJs are preserved.",
+    "removed from the primary OBJ. "
+    + (
+        "Raw all-component OBJs will also be preserved."
+        if _KEEP_ALL_COMPONENTS
+        else "Only cleaned data-supported OBJs will be retained."
+    ),
     flush=True,
 )
 
