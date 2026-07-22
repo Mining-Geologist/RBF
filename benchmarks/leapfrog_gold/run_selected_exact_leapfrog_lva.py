@@ -1,7 +1,8 @@
-"""Run the selected structural benchmark with the recovered Leapfrog LVA sampler forced.
+"""Run the basal-range diagnostic with the recovered Leapfrog LVA sampler forced.
 
-This diagnostic deliberately replaces the automatic builder's single-input sampler with an
-independent implementation of the LVA rules recovered from native Leapfrog projects:
+The automatic builder's single-input sampler is replaced before the benchmark
+suite is imported. The replacement follows the rules recovered from native
+Leapfrog projects:
 
 * equal-weight accumulation of unit triangle normals at each vertex,
 * nearest mesh vertex in Euclidean distance,
@@ -11,12 +12,9 @@ independent implementation of the LVA rules recovered from native Leapfrog proje
 * determinant-one anisotropy with tangent scale ratio**(-1/3) and normal scale
   ratio**(2/3).
 
-The exported Leapfrog glyph base of 4.0 is intentionally absent: it multiplies every glyph
-axis equally and therefore cancels from the anisotropy matrix used by Polatory.
-
-The script then runs the normal selected-case suite.  If its output is unchanged, the
-remaining mismatch is downstream of LVA sampling (clustering, local support, blending or
-field evaluation), not in the recovered single-mesh LVA field.
+The exported glyph base of 4.0 is deliberately absent because it multiplies all
+three displayed glyph axes equally and therefore cancels from the anisotropy
+ratio used by Polatory.
 """
 from __future__ import annotations
 
@@ -31,7 +29,8 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-import run_selected_no_background_blending as suite  # noqa: E402
+# Patch the sampler before importing any benchmark runner that constructs the
+# automatic domains.
 import polatory.automatic_domain_builder as automatic_module  # noqa: E402
 
 
@@ -103,21 +102,26 @@ def exact_leapfrog_single_input_anisotropies3(
     )
 
 
-# Force the automatic builder to use the independent recovered implementation.
 automatic_module.sample_single_input_anisotropies3 = (
     exact_leapfrog_single_input_anisotropies3
 )
 
+# Use the basal runner because it supports POLATORY_BASAL_CASES and produces the
+# same meshes plus the vertical-profile diagnostics needed for S3_R100/R500.
+import run_basal_range_diagnostic as diagnostic  # noqa: E402
+
+suite = diagnostic.suite
 suite.OUTPUT_DIR = suite.ROOT / "benchmark-results" / "exact-leapfrog-lva-forced"
 suite.MESH_DIR = suite.OUTPUT_DIR / "meshes"
 suite.PLOT_DIR = suite.OUTPUT_DIR / "overlays"
+diagnostic.DIAGNOSTIC_DIR = suite.OUTPUT_DIR / "basal-diagnostics"
 
 print(
     "PROGRESS\tExact Leapfrog LVA forced: nearest vertex, equal-weight unit face "
     "normals, exponential decay, hard 4R cutoff and determinant-one anisotropy. "
-    "The Leapfrog glyph base 4.0 is display-only and is not applied to the RBF metric.",
+    "Running the basal-range diagnostic for the requested cases.",
     flush=True,
 )
 
 if __name__ == "__main__":
-    raise SystemExit(suite.main())
+    raise SystemExit(diagnostic.main())
