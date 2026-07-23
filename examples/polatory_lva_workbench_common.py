@@ -50,7 +50,7 @@ NONE = "<None>"
 
 WORKBENCH_PREFIXES = ("Comparison: ", "Field: ", "Distance: ")
 
-_original_window_init = app.MainWindow.__init__
+_base_window_init = app.MainWindow.__init__
 _original_add_layer = app.MainWindow._add_layer
 _process_model_finished = v10._original_model_finished
 
@@ -59,6 +59,77 @@ _process_model_finished = v10._original_model_finished
 class FieldState:
     path: Path | None = None
     frame: pd.DataFrame | None = None
+
+
+def _current_plot_background_is_dark(window: Any) -> bool:
+    try:
+        red, green, blue = window.plotter.renderer.GetBackground()
+        luminance = 0.2126 * float(red) + 0.7152 * float(green) + 0.0722 * float(blue)
+        return luminance < 0.5
+    except Exception:
+        return False
+
+
+def _update_background_button(window: Any) -> None:
+    button = getattr(window, "background_toggle_button", None)
+    if button is None:
+        return
+    dark = bool(getattr(window, "_dark_plot_background", False))
+    if dark:
+        button.setText("Switch to white background")
+        button.setStyleSheet(
+            "QPushButton { background: #f2f2f2; color: #111111; "
+            "border: 1px solid #777777; border-radius: 4px; padding: 5px 9px; }"
+        )
+    else:
+        button.setText("Switch to black background")
+        button.setStyleSheet(
+            "QPushButton { background: #202020; color: #ffffff; "
+            "border: 1px solid #777777; border-radius: 4px; padding: 5px 9px; }"
+        )
+
+
+def _apply_plot_background(window: Any, dark: bool) -> None:
+    window._dark_plot_background = bool(dark)
+    window.plotter.set_background("black" if dark else "white")
+    _update_background_button(window)
+    window.plotter.render()
+
+
+def _toggle_plot_background(window: Any) -> None:
+    _apply_plot_background(
+        window,
+        not bool(getattr(window, "_dark_plot_background", False)),
+    )
+
+
+def _install_background_toggle(window: Any) -> None:
+    """Place a compact black/white switch over the PyVista viewport."""
+    parent = getattr(window.plotter, "interactor", None)
+    if parent is None or not isinstance(parent, QtWidgets.QWidget):
+        parent = window
+
+    button = QtWidgets.QPushButton(parent)
+    button.setObjectName("pyvistaBackgroundToggle")
+    button.setFixedSize(190, 32)
+    button.move(12, 12)
+    button.setToolTip("Switch the PyVista viewport between black and white backgrounds.")
+    button.clicked.connect(lambda _checked=False: _toggle_plot_background(window))
+    window.background_toggle_button = button
+    window._dark_plot_background = _current_plot_background_is_dark(window)
+    _update_background_button(window)
+    button.show()
+    button.raise_()
+
+
+def _window_init_with_background_toggle(window: Any) -> None:
+    _base_window_init(window)
+    _install_background_toggle(window)
+
+
+# ``polatory_lva_workbench.py`` calls this captured initializer before adding its
+# own Workbench tab, so the viewport switch is available in every workbench run.
+_original_window_init = _window_init_with_background_toggle
 
 
 def _unique_name(window: Any, base: str) -> str:
