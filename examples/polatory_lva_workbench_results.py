@@ -1,7 +1,11 @@
 """Generated-surface component filtering and model-completion hooks."""
 from polatory_lva_workbench_fields import *
 
-def _inside_supported_surface(self: Any, result: dict[str, Any]) -> tuple[pv.PolyData, dict[str, Any]]:
+
+def _inside_supported_surface(
+    self: Any,
+    result: dict[str, Any],
+) -> tuple[pv.PolyData, dict[str, Any]]:
     """Keep disconnected result components that are supported by mapped data points."""
     name = "Automatic LVA surface"
     if name not in self.layers:
@@ -11,11 +15,17 @@ def _inside_supported_surface(self: Any, result: dict[str, Any]) -> tuple[pv.Pol
     if "RegionId" not in connected.cell_data:
         return surface, {"raw_components": 1, "kept_components": 1}
 
-    points = np.asarray(getattr(self, "current_points", np.empty((0, 3))), dtype=float)
+    points = np.asarray(
+        getattr(self, "current_points", np.empty((0, 3))),
+        dtype=float,
+    )
     if len(points) == 0:
         return surface, {"raw_components": 1, "kept_components": 1}
     if len(points) > 1:
-        nearest = np.asarray(cKDTree(points).query(points, k=2)[0][:, 1], dtype=float)
+        nearest = np.asarray(
+            cKDTree(points).query(points, k=2)[0][:, 1],
+            dtype=float,
+        )
         nearest = nearest[np.isfinite(nearest) & (nearest > 0.0)]
         median_spacing = float(np.median(nearest)) if len(nearest) else 1.0
     else:
@@ -52,7 +62,9 @@ def _inside_supported_surface(self: Any, result: dict[str, Any]) -> tuple[pv.Pol
 
     kept = [index for index, record in enumerate(records) if record["kept"]]
     if not kept:
-        closest = int(np.argmin([record["median_distance"] for record in records]))
+        closest = int(
+            np.argmin([record["median_distance"] for record in records])
+        )
         records[closest]["kept"] = True
         records[closest]["fallback_closest_component"] = True
         kept = [closest]
@@ -70,7 +82,10 @@ def _inside_supported_surface(self: Any, result: dict[str, Any]) -> tuple[pv.Pol
     }
 
 
-def _replace_generated_with_supported_surface(self: Any, result: dict[str, Any]) -> None:
+def _replace_generated_with_supported_surface(
+    self: Any,
+    result: dict[str, Any],
+) -> None:
     try:
         cleaned, report = _inside_supported_surface(self, result)
         if report["raw_components"] == 1:
@@ -106,7 +121,15 @@ def _replace_generated_with_supported_surface(self: Any, result: dict[str, Any])
 
 def _enhanced_process_model_finished(self: Any, result: dict[str, Any]) -> None:
     _process_model_finished(self, result)
-    _replace_generated_with_supported_surface(self, result)
+    component_filter = getattr(self, "inside_only_filter_check", None)
+    if component_filter is not None and component_filter.isChecked():
+        _replace_generated_with_supported_surface(self, result)
+    else:
+        self._log(
+            "Raw exact full-depth surface retained. The optional disconnected-component "
+            "filter is off so the generated OBJ remains directly comparable with the "
+            "exact-leapfrog-lva-full-depth-sweep output."
+        )
     self._last_workbench_result = result
     _refresh_layer_combos(self)
     self._log(
