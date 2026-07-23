@@ -1,8 +1,18 @@
 """Interactive Polatory structural-LVA workbench launcher."""
 from __future__ import annotations
 
+import os
+import pickle
+import sys
+import tempfile
+from pathlib import Path
 from typing import Any
+
+import numpy as np
+import polatory
+
 from polatory_lva_workbench_results import *
+
 
 def _make_field_group(self: Any) -> QtWidgets.QGroupBox:
     group = QtWidgets.QGroupBox("Point and orientation field")
@@ -51,7 +61,9 @@ def _make_field_group(self: Any) -> QtWidgets.QGroupBox:
     self.field_color_combo = QtWidgets.QComboBox()
     self.field_color_combo.addItem(UNIFORM)
     self.field_cmap_combo = QtWidgets.QComboBox()
-    self.field_cmap_combo.addItems(["viridis", "plasma", "turbo", "coolwarm", "terrain"])
+    self.field_cmap_combo.addItems(
+        ["viridis", "plasma", "turbo", "coolwarm", "terrain"]
+    )
     self.field_glyph_factor_spin = QtWidgets.QDoubleSpinBox()
     self.field_glyph_factor_spin.setRange(1.0e-9, 1.0e12)
     self.field_glyph_factor_spin.setDecimals(6)
@@ -66,13 +78,17 @@ def _make_field_group(self: Any) -> QtWidgets.QGroupBox:
     self.field_stride_spin = QtWidgets.QSpinBox()
     self.field_stride_spin.setRange(1, 1_000_000)
     self.field_stride_spin.setValue(1)
-    self.field_normalise_scale_check = QtWidgets.QCheckBox("Normalize scale to 0.2–1")
+    self.field_normalise_scale_check = QtWidgets.QCheckBox(
+        "Normalize scale to 0.2–1"
+    )
     self.field_normalise_scale_check.setChecked(True)
     self.field_round_points_check = QtWidgets.QCheckBox("Round point sprites")
     self.field_round_points_check.setChecked(True)
     self.field_color_button = QtWidgets.QPushButton()
     _set_button_colour(self.field_color_button, "#36a2eb")
-    self.field_color_button.clicked.connect(lambda: _choose_colour(self, self.field_color_button))
+    self.field_color_button.clicked.connect(
+        lambda: _choose_colour(self, self.field_color_button)
+    )
 
     display_rows = (
         ("Display mode", self.field_mode_combo, 0, 0),
@@ -118,6 +134,17 @@ def _make_mesh_group(self: Any) -> QtWidgets.QGroupBox:
     self.comparison_stats.setReadOnly(True)
     self.comparison_stats.setMaximumHeight(130)
     layout.addWidget(self.comparison_stats)
+
+    self.inside_only_filter_check = QtWidgets.QCheckBox(
+        "After modelling, remove disconnected components unsupported by input data"
+    )
+    self.inside_only_filter_check.setChecked(False)
+    self.inside_only_filter_check.setToolTip(
+        "Off preserves the raw exact-leapfrog-lva-full-depth-sweep surface for direct "
+        "parity comparison. Enable only when a dataset creates a separate unsupported "
+        "outside shell that you intentionally want removed."
+    )
+    layout.addWidget(self.inside_only_filter_check)
     return group
 
 
@@ -143,10 +170,14 @@ def _make_layer_group(self: Any) -> QtWidgets.QGroupBox:
     )
     self.layer_color_button = QtWidgets.QPushButton()
     _set_button_colour(self.layer_color_button, "#ffffff")
-    self.layer_color_button.clicked.connect(lambda: _choose_colour(self, self.layer_color_button))
+    self.layer_color_button.clicked.connect(
+        lambda: _choose_colour(self, self.layer_color_button)
+    )
     self.edge_color_button = QtWidgets.QPushButton()
     _set_button_colour(self.edge_color_button, "#202020")
-    self.edge_color_button.clicked.connect(lambda: _choose_colour(self, self.edge_color_button))
+    self.edge_color_button.clicked.connect(
+        lambda: _choose_colour(self, self.edge_color_button)
+    )
     self.layer_line_width_spin = QtWidgets.QDoubleSpinBox()
     self.layer_line_width_spin.setRange(1.0, 20.0)
     self.layer_line_width_spin.setValue(1.0)
@@ -178,19 +209,174 @@ def _make_layer_group(self: Any) -> QtWidgets.QGroupBox:
     return group
 
 
+def _apply_exact_defaults(self: Any) -> None:
+    defaults = (
+        ("sill_spin", 100.0),
+        ("total_sill_spin", 100.0),
+        ("base_range_spin", 400.0),
+        ("nugget_spin", 0.0),
+        ("outside_value_spin", -1.0),
+        ("blend_power_spin", 1.0),
+        ("alignment_spin", 0.0),
+        ("centroid_count_spin", 6000),
+        ("minimum_fraction_spin", 0.001),
+        ("maximum_fraction_spin", 0.10),
+        ("consistency_spin", 0.60),
+        ("support_multiplier_spin", 5),
+        ("minimum_support_spin", 1),
+        ("max_iterations_spin", 100),
+        ("maximum_iterations_spin", 100),
+        ("poly_degree_spin", 0),
+        ("degree_spin", 0),
+    )
+    for name, value in defaults:
+        widget = getattr(self, name, None)
+        setter = getattr(widget, "setValue", None)
+        if callable(setter):
+            try:
+                setter(value)
+            except (TypeError, OverflowError):
+                pass
+
+    trend_type = getattr(self, "trend_type_combo", None)
+    if trend_type is not None:
+        index = trend_type.findText("Strongest along inputs")
+        if index >= 0:
+            trend_type.setCurrentIndex(index)
+
+
+def _workbench_run_model(self: Any) -> None:
+    """Launch the exact full-depth worker rather than the older generic v11 worker."""
+    if v10._process_is_running(self):
+        QtWidgets.QMessageBox.information(
+            self,
+            app.APP_TITLE,
+            "A modelling run is already in progress.",
+        )
+        return
+
+    try:
+        if not hasattr(polatory, "AutomaticStructuralDomainBuilder3"):
+            raise RuntimeError(
+                "AutomaticStructuralDomainBuilder3 is unavailable. Reinstall the "
+                "feature/automatic-subdomainer branch and restart the app."
+            )
+        if self.reference_vertices is None or self.reference_faces is None:
+            raise ValueError("Load the structural reference OBJ first.")
+
+        points, indicators, roles, source_rows = self._mapped_arrays()
+        contact_count = int(np.count_nonzero(indicators == 0.0))
+        if contact_count and self.nugget_spin.value() != 0.0:
+            self.nugget_spin.setValue(0.0)
+            self._log("Nugget was forced to 0 because Contact categories are active.")
+
+        self.current_points = points
+        self.current_indicators = indicators
+        self.current_roles = roles
+        self.current_source_rows = source_rows
+
+        bbox_min, bbox_max = self.current_bbox()
+        parameters = self.model_parameters()
+        payload = {
+            "points": points.copy(),
+            "indicators": indicators.copy(),
+            "trend_vertices": self.reference_vertices.copy(),
+            "trend_faces": self.reference_faces.copy(),
+            "bbox_min": bbox_min.copy(),
+            "bbox_max": bbox_max.copy(),
+            "parameters": parameters,
+        }
+
+        v10.v9.retire_previous_result(self)
+        v10._cleanup_process_files(self, keep_obj=False)
+
+        work_dir = Path(tempfile.mkdtemp(prefix="polatory_lva_exact_process_"))
+        input_path = work_dir / "payload.pkl"
+        result_path = work_dir / "result.pkl"
+        descriptor, output_obj_name = tempfile.mkstemp(
+            prefix="polatory_lva_exact_result_",
+            suffix=".obj",
+        )
+        os.close(descriptor)
+        output_obj = Path(output_obj_name)
+        try:
+            output_obj.unlink()
+        except OSError:
+            pass
+
+        with input_path.open("wb") as stream:
+            pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
+
+        helper = Path(__file__).with_name("polatory_lva_workbench_exact_worker.py")
+        if not helper.exists():
+            raise FileNotFoundError(f"Missing exact full-depth worker script: {helper}")
+
+        process = QtCore.QProcess(self)
+        process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
+        environment = QtCore.QProcessEnvironment.systemEnvironment()
+        environment.insert("PYTHONUNBUFFERED", "1")
+        environment.insert("PYTHONIOENCODING", "utf-8")
+        process.setProcessEnvironment(environment)
+        process.setProgram(sys.executable)
+        process.setArguments(
+            [
+                str(helper),
+                "--input",
+                str(input_path),
+                "--result",
+                str(result_path),
+                "--obj",
+                str(output_obj),
+            ]
+        )
+        process.readyReadStandardOutput.connect(
+            lambda: v10._read_process_output(self)
+        )
+        process.errorOccurred.connect(
+            lambda error: v10._process_error(self, error)
+        )
+        process.finished.connect(
+            lambda code, status: v10._process_finished(self, int(code), status)
+        )
+
+        self._model_process = process
+        self._model_process_work_dir = str(work_dir)
+        self._model_process_input = str(input_path)
+        self._model_process_result = str(result_path)
+        self._model_process_output_obj = str(output_obj)
+        self._model_process_output_buffer = ""
+
+        self.run_button.setEnabled(False)
+        self.progress_bar.setRange(0, 0)
+        self.tabs.setCurrentIndex(self.log_tab_index)
+        self._log(
+            "Starting exact full-depth modelling in an isolated process: exact 4R LVA "
+            "sampler, finite geodesic domains, background blending disabled, "
+            "topology-local support completion, lower-Z domain extension and global "
+            "aligned-grid meshing."
+        )
+        process.start()
+    except Exception as error:
+        v10._cleanup_process_files(self, keep_obj=False)
+        self.run_button.setEnabled(True)
+        self._show_error("Could not start exact full-depth modelling", error)
+
+
 def workbench_window_init(self: Any) -> None:
     _original_window_init(self)
-    self.setWindowTitle("Polatory Structural LVA Workbench")
+    self.setWindowTitle("Polatory Structural LVA Workbench — Exact Full-Depth")
     self._field_state = FieldState()
     self._last_workbench_result: dict[str, Any] | None = None
+    _apply_exact_defaults(self)
 
     page = QtWidgets.QWidget()
     page_layout = QtWidgets.QVBoxLayout(page)
     intro = QtWidgets.QLabel(
-        "Import comparison meshes and arbitrary point/orientation fields. The normal "
-        "Data and Model tabs remain the modelling workflow. Model results already "
-        "include automatic domain points, centroid clusters, LVA field slices and "
-        "principal-axis glyphs."
+        "The modelling button uses the same algorithmic path as "
+        "exact-leapfrog-lva-full-depth-sweep. For a direct mesh match, use the same "
+        "input rows, role/sign mapping, structural OBJ, model extent, Strength, Trend "
+        "range, surface resolution and base RBF settings. Imported field and comparison "
+        "layers do not alter the model."
     )
     intro.setWordWrap(True)
     page_layout.addWidget(intro)
@@ -216,13 +402,14 @@ def workbench_window_init(self: Any) -> None:
 
     _refresh_layer_combos(self)
     self._log(
-        "LVA Workbench loaded: comparison meshes, mesh distances, arbitrary field "
-        "CSV glyphs and per-layer appearance controls are ready."
+        "Exact full-depth Workbench loaded. Raw result filtering is off by default so "
+        "the generated surface can be compared directly with the stable benchmark."
     )
 
 
 app.MainWindow.__init__ = workbench_window_init
 app.MainWindow._add_layer = workbench_add_layer
+app.MainWindow.run_model = _workbench_run_model
 v10._original_model_finished = _enhanced_process_model_finished
 
 
