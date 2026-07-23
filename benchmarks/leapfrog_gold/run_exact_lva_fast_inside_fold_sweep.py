@@ -6,13 +6,23 @@ not extend every automatic domain across the complete 5x model box. The generate
 mesh is then split into connected components and unsupported enclosing shells are
 removed. Only the cleaned data-supported OBJ is retained.
 
-Use the same environment variables as run_exact_lva_full_depth_fold_sweep.py.
+The common benchmark defaults remain 50,000,000 base cells and 256 scalar slabs.
+For this fold runner only, either limit can be disabled by setting its environment
+variable to zero before Python starts:
+
+- POLATORY_FOLD_MAX_TOTAL_BASE_CELLS=0
+- POLATORY_FOLD_MAX_CHUNKS=0
+
+A positive value replaces the corresponding default with that explicit limit.
+Use the same remaining environment variables as
+``run_exact_lva_full_depth_fold_sweep.py``.
 """
 from __future__ import annotations
 
 import json
 import math
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +41,45 @@ diagnostic = fold.diagnostic
 _BASE_BUILD_CASE = suite.build_case
 _BASE_GENERATE_ISOSURFACE = suite.SAFE_MESHER.generate_safe_isosurface
 _CURRENT_POINTS: np.ndarray | None = None
+_LIMIT_MESSAGE_PRINTED = False
+
+
+def _configured_limit(name: str, current: int) -> int:
+    """Read a positive integer limit; zero means no practical Python-side limit."""
+    text = os.environ.get(name, "").strip()
+    if not text:
+        return int(current)
+    value = int(text)
+    if value < 0:
+        raise ValueError(f"{name} must be zero or a positive integer")
+    return int(sys.maxsize if value == 0 else value)
+
+
+def _apply_fold_meshing_limits() -> None:
+    """Override limits after the common benchmark resets its safe defaults."""
+    global _LIMIT_MESSAGE_PRINTED
+    cells = _configured_limit(
+        "POLATORY_FOLD_MAX_TOTAL_BASE_CELLS",
+        int(suite.SAFE_MESHER.MAX_TOTAL_BASE_CELLS),
+    )
+    chunks = _configured_limit(
+        "POLATORY_FOLD_MAX_CHUNKS",
+        int(suite.SAFE_MESHER.MAX_CHUNKS),
+    )
+    suite.SAFE_MESHER.MAX_TOTAL_BASE_CELLS = cells
+    suite.SAFE_MESHER.MAX_CHUNKS = chunks
+
+    if not _LIMIT_MESSAGE_PRINTED:
+        cell_text = "unlimited" if cells == sys.maxsize else f"{cells:,}"
+        chunk_text = "unlimited" if chunks == sys.maxsize else f"{chunks:,}"
+        print(
+            "PROGRESS\tFold meshing safety limits: "
+            f"base cells={cell_text}, scalar slabs={chunk_text}. "
+            "The scalar field remains slab-streamed; disabling these guards does not "
+            "make the computation small.",
+            flush=True,
+        )
+        _LIMIT_MESSAGE_PRINTED = True
 
 
 def _support_distance(points: np.ndarray) -> tuple[float, float]:
@@ -182,6 +231,9 @@ def _filter_supported_components(output_obj: Path, points: np.ndarray) -> dict[s
 
 
 def _filtered_generate_isosurface(*args: Any, **kwargs: Any):
+    # run_real_gold_suite.py resets its conservative defaults immediately before
+    # calling us. Apply fold-specific overrides here so zero/unlimited is honoured.
+    _apply_fold_meshing_limits()
     result = _BASE_GENERATE_ISOSURFACE(*args, **kwargs)
     output_obj = kwargs.get("output_obj")
     if output_obj is None:
