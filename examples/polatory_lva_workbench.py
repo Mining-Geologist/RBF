@@ -114,6 +114,40 @@ def _make_field_group(self: Any) -> QtWidgets.QGroupBox:
     return group
 
 
+def _make_domain_extent_group(self: Any) -> QtWidgets.QGroupBox:
+    group = QtWidgets.QGroupBox("Automatic domain extent")
+    layout = QtWidgets.QVBoxLayout(group)
+
+    form = QtWidgets.QFormLayout()
+    self.domain_extent_mode_combo = QtWidgets.QComboBox()
+    self.domain_extent_mode_combo.addItem(
+        "Exact full-depth — extend lower Z to model minimum",
+        "full_depth",
+    )
+    self.domain_extent_mode_combo.addItem(
+        "Finite automatic domains — no model-boundary extension",
+        "finite",
+    )
+    self.domain_extent_mode_combo.setCurrentIndex(0)
+    self.domain_extent_mode_combo.setToolTip(
+        "Full-depth preserves the previous fold benchmark behaviour. Finite keeps each "
+        "automatic domain within its recovered local LVA support and is usually more "
+        "appropriate for closed intrusions and bounded geological bodies."
+    )
+    form.addRow("Domain extent mode", self.domain_extent_mode_combo)
+    layout.addLayout(form)
+
+    explanation = QtWidgets.QLabel(
+        "Exact full-depth extends only the lower Z face of every automatic domain to the "
+        "model minimum. Finite automatic domains keep the recovered local bounds. All "
+        "other LVA, RBF, support-completion and meshing settings remain unchanged, so the "
+        "two results can be compared directly."
+    )
+    explanation.setWordWrap(True)
+    layout.addWidget(explanation)
+    return group
+
+
 def _make_mesh_group(self: Any) -> QtWidgets.QGroupBox:
     group = QtWidgets.QGroupBox("Comparison meshes and distance")
     layout = QtWidgets.QVBoxLayout(group)
@@ -246,7 +280,7 @@ def _apply_exact_defaults(self: Any) -> None:
 
 
 def _workbench_run_model(self: Any) -> None:
-    """Launch the exact full-depth worker rather than the older generic v11 worker."""
+    """Launch the selectable domain-extent worker rather than the older generic worker."""
     if v10._process_is_running(self):
         QtWidgets.QMessageBox.information(
             self,
@@ -309,13 +343,20 @@ def _workbench_run_model(self: Any) -> None:
 
         helper = Path(__file__).with_name("polatory_lva_workbench_exact_worker.py")
         if not helper.exists():
-            raise FileNotFoundError(f"Missing exact full-depth worker script: {helper}")
+            raise FileNotFoundError(f"Missing selectable domain worker script: {helper}")
 
         process = QtCore.QProcess(self)
         process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
         environment = QtCore.QProcessEnvironment.systemEnvironment()
         environment.insert("PYTHONUNBUFFERED", "1")
         environment.insert("PYTHONIOENCODING", "utf-8")
+        domain_mode = "full_depth"
+        combo = getattr(self, "domain_extent_mode_combo", None)
+        if combo is not None:
+            selected = combo.currentData()
+            if selected in {"full_depth", "finite"}:
+                domain_mode = str(selected)
+        environment.insert("POLATORY_DOMAIN_EXTENT_MODE", domain_mode)
         process.setProcessEnvironment(environment)
         process.setProgram(sys.executable)
         process.setArguments(
@@ -349,22 +390,30 @@ def _workbench_run_model(self: Any) -> None:
         self.run_button.setEnabled(False)
         self.progress_bar.setRange(0, 0)
         self.tabs.setCurrentIndex(self.log_tab_index)
+        if domain_mode == "finite":
+            extent_description = (
+                "finite automatic domains with no model-boundary extension"
+            )
+        else:
+            extent_description = (
+                "exact full-depth domains with lower-Z extension to the model minimum"
+            )
         self._log(
-            "Starting exact full-depth modelling in an isolated process: exact 4R LVA "
-            "sampler, finite geodesic domains, background blending disabled, "
-            "topology-local support completion, lower-Z domain extension and global "
-            "aligned-grid meshing."
+            "Starting modelling in an isolated process using "
+            f"{extent_description}: exact 4R LVA sampler, finite-geodesic domain "
+            "construction, background blending disabled, topology-local support "
+            "completion and global aligned-grid meshing."
         )
         process.start()
     except Exception as error:
         v10._cleanup_process_files(self, keep_obj=False)
         self.run_button.setEnabled(True)
-        self._show_error("Could not start exact full-depth modelling", error)
+        self._show_error("Could not start structural LVA modelling", error)
 
 
 def workbench_window_init(self: Any) -> None:
     _original_window_init(self)
-    self.setWindowTitle("Polatory Structural LVA Workbench — Exact Full-Depth")
+    self.setWindowTitle("Polatory Structural LVA Workbench")
     self._field_state = FieldState()
     self._last_workbench_result: dict[str, Any] | None = None
     _apply_exact_defaults(self)
@@ -372,14 +421,16 @@ def workbench_window_init(self: Any) -> None:
     page = QtWidgets.QWidget()
     page_layout = QtWidgets.QVBoxLayout(page)
     intro = QtWidgets.QLabel(
-        "The modelling button uses the same algorithmic path as "
-        "exact-leapfrog-lva-full-depth-sweep. For a direct mesh match, use the same "
-        "input rows, role/sign mapping, structural OBJ, model extent, Strength, Trend "
-        "range, surface resolution and base RBF settings. Imported field and comparison "
-        "layers do not alter the model."
+        "Choose Exact full-depth to preserve the previous "
+        "exact-leapfrog-lva-full-depth-sweep behaviour, or Finite automatic domains to "
+        "keep the recovered local domain bounds. For a direct benchmark match, use the "
+        "same input rows, role/sign mapping, structural OBJ, model extent, Strength, "
+        "Trend range, surface resolution and base RBF settings. Imported field and "
+        "comparison layers do not alter the model."
     )
     intro.setWordWrap(True)
     page_layout.addWidget(intro)
+    page_layout.addWidget(_make_domain_extent_group(self))
     page_layout.addWidget(_make_mesh_group(self))
     page_layout.addWidget(_make_field_group(self))
     page_layout.addWidget(_make_layer_group(self))
@@ -402,8 +453,9 @@ def workbench_window_init(self: Any) -> None:
 
     _refresh_layer_combos(self)
     self._log(
-        "Exact full-depth Workbench loaded. Raw result filtering is off by default so "
-        "the generated surface can be compared directly with the stable benchmark."
+        "Workbench loaded with selectable domain extent. Exact full-depth is the default "
+        "to preserve the stable benchmark; switch to Finite automatic domains for a "
+        "direct comparison. Raw result filtering remains off by default."
     )
 
 
