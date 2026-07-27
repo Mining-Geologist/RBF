@@ -1,4 +1,4 @@
-"""Process worker matching ``exact-leapfrog-lva-full-depth-sweep``.
+"""Process worker for exact-support LVA with selectable domain extent.
 
 This worker deliberately reuses the same recovered production corrections as the
 confirmed benchmark:
@@ -7,14 +7,15 @@ confirmed benchmark:
 * finite LVA-geodesic automatic domains;
 * ``background_blending=False``;
 * topology-local, data-driven unsupported-branch completion;
-* lower-Z-only full-depth domain extension to the user model minimum;
+* optional lower-Z-only full-depth domain extension to the user model minimum;
 * globally aligned slab-streamed marching cubes.
 
-The model extent, dataset, reference mesh, strength and range come from the GUI
-payload, so no WolfPass coordinates or case names are embedded here.
+The model extent, dataset, reference mesh, strength, range and domain-extent mode come
+from the GUI, so no WolfPass coordinates or case names are embedded here.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -86,8 +87,44 @@ class ExactFullDepthAutomaticBuilder:
         return getattr(self._wrapped, name)
 
 
-worker.FiniteLvaGeodesicAutomaticBuilder = ExactFullDepthAutomaticBuilder
-main = worker.main
+def _domain_extent_mode() -> str:
+    value = os.environ.get("POLATORY_DOMAIN_EXTENT_MODE", "full_depth")
+    normalized = str(value).strip().casefold().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "full": "full_depth",
+        "full_depth": "full_depth",
+        "exact": "full_depth",
+        "exact_full_depth": "full_depth",
+        "finite": "finite",
+        "finite_domains": "finite",
+        "finite_automatic_domains": "finite",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as error:
+        raise ValueError(
+            "POLATORY_DOMAIN_EXTENT_MODE must be 'full_depth' or 'finite', "
+            f"not {value!r}."
+        ) from error
+
+
+def main() -> int:
+    mode = _domain_extent_mode()
+    if mode == "finite":
+        worker.FiniteLvaGeodesicAutomaticBuilder = _BASE_BUILDER
+        print(
+            "PROGRESS\tDomain extent mode: Finite automatic domains. Recovered local "
+            "LVA-geodesic bounds are retained; no face is extended to the model boundary.",
+            flush=True,
+        )
+    else:
+        worker.FiniteLvaGeodesicAutomaticBuilder = ExactFullDepthAutomaticBuilder
+        print(
+            "PROGRESS\tDomain extent mode: Exact full-depth. Lower Z faces may be "
+            "extended to the model minimum after finite-domain construction.",
+            flush=True,
+        )
+    return worker.main()
 
 
 if __name__ == "__main__":
