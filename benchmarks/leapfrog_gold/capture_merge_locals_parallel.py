@@ -5,14 +5,12 @@ recompute. The script never injects code into Leapfrog.
 
 The earlier implementation launched many simultaneous ``py-spy dump --locals``
 processes. On Windows, each dump briefly suspends the target process, so overlapping
-dumps could keep Leapfrog almost continuously paused. This version is adaptive:
+dumps could keep Leapfrog almost continuously paused. This version uses one sampler.
 
-1. One lightweight sampler (without locals) waits for the requested domaining stage.
-2. Only after that stage starts, one sampler briefly switches to ``--locals`` and
-   looks for an actual ``merge_domains`` frame.
-
-Use ``--stage real`` to skip the coarse ``GridSeededDomainer`` and capture the
-second, real-location ``SubDomainer`` stage.
+Use ``--stage real`` to follow the coarse ``GridSeededDomainer`` into the second,
+real-location ``SubDomainer`` stage. Real mode intentionally starts its single locals
+sampler as soon as coarse region growing is seen, because the real stage can be too
+short to detect first with a 0.5-second lightweight polling interval.
 """
 from __future__ import annotations
 
@@ -73,15 +71,32 @@ def process_is_gone(output: str) -> bool:
     return "no such process" in lowered or "os error 87" in lowered
 
 
-def stage_matches(output: str, stage: str) -> bool:
-    in_region_growing = REGION_TERM in output or MERGE_TERM in output
-    if not in_region_growing:
-        return False
-    in_real_stage = REAL_STAGE_TERM in output or "self: <SubDomainer at " in output
+def in_region_growing(output: str) -> bool:
+    return REGION_TERM in output or MERGE_TERM in output
+
+
+def in_real_stage(output: str) -> bool:
+    return REAL_STAGE_TERM in output or "self: <SubDomainer at " in output
+
+
+def trigger_matches(output: str, stage: str) -> bool:
+    """Return True when it is safe to begin the single locals-capture burst."""
     if stage == "real":
-        return in_real_stage
+        # The real pass can be extremely short. Start following during the coarse
+        # pass rather than trying to observe the real parent frame first.
+        return in_region_growing(output) or in_real_stage(output)
     if stage == "coarse":
-        return not in_real_stage
+        return in_region_growing(output) and not in_real_stage(output)
+    return in_region_growing(output)
+
+
+def capture_matches(output: str, stage: str) -> bool:
+    if MERGE_TERM not in output:
+        return False
+    if stage == "real":
+        return in_real_stage(output)
+    if stage == "coarse":
+        return not in_real_stage(output)
     return True
 
 
@@ -89,8 +104,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=300.0)
     parser.add_argument("--idle-interval", type=float, default=0.5)
-    parser.add_argument("--burst-duration", type=float, default=90.0)
-    parser.add_argument("--burst-interval", type=float, default=0.05)
+    parser.add_argument("--burst-duration", type=float, default=180.0)
+    parser.add_argument("--burst-interval", type=float, default=0.02)
     parser.add_argument(
         "--stage",
         choices=("any", "coarse", "real"),
@@ -117,12 +132,12 @@ def main() -> int:
 
     print(
         f"Watching Leapfrog background PID {pid} for the {args.stage} domaining stage "
-        "with one low-impact sampler."
+        "with one sampler."
     )
     print("Trigger the automatic-domaining recompute now.", flush=True)
 
     overall_deadline = time.monotonic() + max(args.duration, 1.0)
-    stage_seen = False
+    trigger_seen = False
     light_samples = 0
 
     while time.monotonic() < overall_deadline:
@@ -130,17 +145,24 @@ def main() -> int:
         light_samples += 1
         if process_is_gone(output):
             raise SystemExit("The Leapfrog background process exited or restarted.")
-        if stage_matches(output, args.stage):
-            stage_seen = True
-            print(
-                f"Requested stage detected after {light_samples} lightweight samples; "
-                "switching briefly to locals capture.",
-                flush=True,
-            )
+        if trigger_matches(output, args.stage):
+            trigger_seen = True
+            if args.stage == "real" and not in_real_stage(output):
+                print(
+                    f"Coarse region growing detected after {light_samples} lightweight "
+                    "samples; following it into the real stage with one locals sampler.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Capture trigger detected after {light_samples} lightweight samples; "
+                    "switching to one locals sampler.",
+                    flush=True,
+                )
             break
         time.sleep(max(args.idle_interval, 0.05))
 
-    if not stage_seen:
+    if not trigger_seen:
         print("The requested domaining stage was not observed before the timeout.")
         return 1
 
@@ -154,7 +176,7 @@ def main() -> int:
         local_samples += 1
         if process_is_gone(output):
             raise SystemExit("The Leapfrog background process exited or restarted.")
-        if MERGE_TERM in output and stage_matches(output, args.stage):
+        if capture_matches(output, args.stage):
             args.output.write_text(output, encoding="utf-8")
             print(
                 f"Captured {args.stage} merge_domains locals after {local_samples} "
@@ -164,7 +186,7 @@ def main() -> int:
         time.sleep(max(args.burst_interval, 0.01))
 
     print(
-        "The requested stage was detected, but no matching merge_domains frame was "
+        "The capture trigger was detected, but no matching merge_domains frame was "
         "captured. Leapfrog was left running normally."
     )
     return 1
