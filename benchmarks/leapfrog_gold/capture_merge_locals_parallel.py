@@ -1,4 +1,4 @@
-"""Capture Leapfrog region-growing merge locals with minimal interference.
+"""Capture Leapfrog domaining locals with minimal interference.
 
 Run this while Leapfrog is open, then immediately trigger an automatic-domaining
 recompute. The script never injects code into Leapfrog.
@@ -8,9 +8,10 @@ processes. On Windows, each dump briefly suspends the target process, so overlap
 dumps could keep Leapfrog almost continuously paused. This version uses one sampler.
 
 Use ``--stage real`` to follow the coarse ``GridSeededDomainer`` into the second,
-real-location ``SubDomainer`` stage. Real mode intentionally starts its single locals
-sampler as soon as coarse region growing is seen, because the real stage can be too
-short to detect first with a 0.5-second lightweight polling interval.
+real-location ``SubDomainer`` stage. Real mode starts its single locals sampler as
+soon as coarse region growing is seen. It saves the first snapshot containing the
+real-stage parent frame, even when the inner ``merge_domains`` call is too short to
+observe directly.
 """
 from __future__ import annotations
 
@@ -91,10 +92,12 @@ def trigger_matches(output: str, stage: str) -> bool:
 
 
 def capture_matches(output: str, stage: str) -> bool:
+    if stage == "real":
+        # The inner merge frame can be shorter than one py-spy dump. The parent
+        # frame still exposes the real-point mapping and SubDomainer construction.
+        return in_real_stage(output)
     if MERGE_TERM not in output:
         return False
-    if stage == "real":
-        return in_real_stage(output)
     if stage == "coarse":
         return not in_real_stage(output)
     return True
@@ -178,16 +181,17 @@ def main() -> int:
             raise SystemExit("The Leapfrog background process exited or restarted.")
         if capture_matches(output, args.stage):
             args.output.write_text(output, encoding="utf-8")
+            capture_name = "real-stage locals" if args.stage == "real" else "merge_domains locals"
             print(
-                f"Captured {args.stage} merge_domains locals after {local_samples} "
-                f"locals samples: {args.output}"
+                f"Captured {capture_name} after {local_samples} locals samples: "
+                f"{args.output}"
             )
             return 0
         time.sleep(max(args.burst_interval, 0.01))
 
     print(
-        "The capture trigger was detected, but no matching merge_domains frame was "
-        "captured. Leapfrog was left running normally."
+        "The capture trigger was detected, but no matching stage frame was captured. "
+        "Leapfrog was left running normally."
     )
     return 1
 
