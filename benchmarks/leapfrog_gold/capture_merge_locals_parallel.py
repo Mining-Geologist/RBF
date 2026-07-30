@@ -1,7 +1,9 @@
-"""Capture Leapfrog automatic-domaining locals with parallel read-only py-spy dumps.
+"""Capture Leapfrog's actual region-growing merge locals with read-only py-spy dumps.
 
 Run this while Leapfrog is open, then immediately trigger an automatic-domaining
 recompute. The script never injects code into Leapfrog; it only reads stack frames.
+It deliberately ignores the earlier singleton-neighbour analysis in ``_init_grid``
+and stops only when a real ``merge_domains`` frame is present.
 """
 from __future__ import annotations
 
@@ -14,11 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-MATCH_TERMS = (
-    "merge_domains (domaining.py",
-    "_find_joint_consistency (domaining.py",
-    "set_domains_by_region_growing (domaining.py",
-)
+MATCH_TERM = "merge_domains (domaining.py"
 
 
 def find_background_pid() -> int | None:
@@ -63,7 +61,7 @@ def worker(
         except subprocess.TimeoutExpired:
             continue
         output = (completed.stdout or "") + (completed.stderr or "")
-        if any(term in output for term in MATCH_TERMS):
+        if MATCH_TERM in output:
             stop.set()
             return worker_id, output
         if "No such process" in output or "os error 87" in output:
@@ -74,7 +72,7 @@ def worker(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=120.0)
-    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--workers", type=int, default=16)
     parser.add_argument(
         "--output",
         type=Path,
@@ -113,12 +111,12 @@ def main() -> int:
 
     stop.set()
     if result is None:
-        print("No merge frame was captured. Re-run and trigger recompute immediately.")
+        print("No merge_domains frame was captured. Re-run and trigger recompute immediately.")
         return 1
 
     worker_id, output = result
     args.output.write_text(output, encoding="utf-8")
-    print(f"Captured merge locals with worker {worker_id}: {args.output}")
+    print(f"Captured merge_domains locals with worker {worker_id}: {args.output}")
     return 0
 
 
