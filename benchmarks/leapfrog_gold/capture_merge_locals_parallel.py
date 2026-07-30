@@ -1,4 +1,4 @@
-"""Capture Leapfrog's region-growing merge locals with minimal interference.
+"""Capture Leapfrog region-growing merge locals with minimal interference.
 
 Run this while Leapfrog is open, then immediately trigger an automatic-domaining
 recompute. The script never injects code into Leapfrog.
@@ -7,10 +7,12 @@ The earlier implementation launched many simultaneous ``py-spy dump --locals``
 processes. On Windows, each dump briefly suspends the target process, so overlapping
 dumps could keep Leapfrog almost continuously paused. This version is adaptive:
 
-1. One lightweight sampler (without locals) waits for
-   ``set_domains_by_region_growing``.
-2. Only after region growing starts, one sampler briefly switches to ``--locals``
-   and looks for an actual ``merge_domains`` frame.
+1. One lightweight sampler (without locals) waits for the requested domaining stage.
+2. Only after that stage starts, one sampler briefly switches to ``--locals`` and
+   looks for an actual ``merge_domains`` frame.
+
+Use ``--stage real`` to skip the coarse ``GridSeededDomainer`` and capture the
+second, real-location ``SubDomainer`` stage.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from pathlib import Path
 
 REGION_TERM = "set_domains_by_region_growing (domaining.py"
 MERGE_TERM = "merge_domains (domaining.py"
+REAL_STAGE_TERM = "subdomain_with_real_locations (domaining.py"
 
 
 def find_background_pid() -> int | None:
@@ -70,12 +73,30 @@ def process_is_gone(output: str) -> bool:
     return "no such process" in lowered or "os error 87" in lowered
 
 
+def stage_matches(output: str, stage: str) -> bool:
+    in_region_growing = REGION_TERM in output or MERGE_TERM in output
+    if not in_region_growing:
+        return False
+    in_real_stage = REAL_STAGE_TERM in output or "self: <SubDomainer at " in output
+    if stage == "real":
+        return in_real_stage
+    if stage == "coarse":
+        return not in_real_stage
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=300.0)
     parser.add_argument("--idle-interval", type=float, default=0.5)
     parser.add_argument("--burst-duration", type=float, default=90.0)
     parser.add_argument("--burst-interval", type=float, default=0.05)
+    parser.add_argument(
+        "--stage",
+        choices=("any", "coarse", "real"),
+        default="any",
+        help="Domaining stage to capture. 'real' targets the second SubDomainer stage.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -94,11 +115,14 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.unlink(missing_ok=True)
 
-    print(f"Watching Leapfrog background PID {pid} with one low-impact sampler.")
+    print(
+        f"Watching Leapfrog background PID {pid} for the {args.stage} domaining stage "
+        "with one low-impact sampler."
+    )
     print("Trigger the automatic-domaining recompute now.", flush=True)
 
     overall_deadline = time.monotonic() + max(args.duration, 1.0)
-    region_seen = False
+    stage_seen = False
     light_samples = 0
 
     while time.monotonic() < overall_deadline:
@@ -106,18 +130,18 @@ def main() -> int:
         light_samples += 1
         if process_is_gone(output):
             raise SystemExit("The Leapfrog background process exited or restarted.")
-        if REGION_TERM in output or MERGE_TERM in output:
-            region_seen = True
+        if stage_matches(output, args.stage):
+            stage_seen = True
             print(
-                f"Region growing detected after {light_samples} lightweight samples; "
+                f"Requested stage detected after {light_samples} lightweight samples; "
                 "switching briefly to locals capture.",
                 flush=True,
             )
             break
         time.sleep(max(args.idle_interval, 0.05))
 
-    if not region_seen:
-        print("Region growing was not observed before the timeout.")
+    if not stage_seen:
+        print("The requested domaining stage was not observed before the timeout.")
         return 1
 
     burst_deadline = min(
@@ -130,18 +154,18 @@ def main() -> int:
         local_samples += 1
         if process_is_gone(output):
             raise SystemExit("The Leapfrog background process exited or restarted.")
-        if MERGE_TERM in output:
+        if MERGE_TERM in output and stage_matches(output, args.stage):
             args.output.write_text(output, encoding="utf-8")
             print(
-                f"Captured merge_domains locals after {local_samples} locals samples: "
-                f"{args.output}"
+                f"Captured {args.stage} merge_domains locals after {local_samples} "
+                f"locals samples: {args.output}"
             )
             return 0
         time.sleep(max(args.burst_interval, 0.01))
 
     print(
-        "Region growing was detected, but no merge_domains frame was captured. "
-        "Leapfrog was left running normally."
+        "The requested stage was detected, but no matching merge_domains frame was "
+        "captured. Leapfrog was left running normally."
     )
     return 1
 
