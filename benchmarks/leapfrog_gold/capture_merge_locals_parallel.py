@@ -1,22 +1,28 @@
-"""Capture Leapfrog's actual region-growing merge locals with read-only py-spy dumps.
+"""Capture Leapfrog's region-growing merge locals with minimal interference.
 
 Run this while Leapfrog is open, then immediately trigger an automatic-domaining
-recompute. The script never injects code into Leapfrog; it only reads stack frames.
-It deliberately ignores the earlier singleton-neighbour analysis in ``_init_grid``
-and stops only when a real ``merge_domains`` frame is present.
+recompute. The script never injects code into Leapfrog.
+
+The earlier implementation launched many simultaneous ``py-spy dump --locals``
+processes. On Windows, each dump briefly suspends the target process, so overlapping
+dumps could keep Leapfrog almost continuously paused. This version is adaptive:
+
+1. One lightweight sampler (without locals) waits for
+   ``set_domains_by_region_growing``.
+2. Only after region growing starts, one sampler briefly switches to ``--locals``
+   and looks for an actual ``merge_domains`` frame.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import subprocess
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-MATCH_TERM = "merge_domains (domaining.py"
+REGION_TERM = "set_domains_by_region_growing (domaining.py"
+MERGE_TERM = "merge_domains (domaining.py"
 
 
 def find_background_pid() -> int | None:
@@ -41,38 +47,35 @@ def default_py_spy() -> Path:
     return Path(local_appdata) / "Programs" / "Python" / "Python312" / "Scripts" / "py-spy.exe"
 
 
-def worker(
-    worker_id: int,
-    py_spy: Path,
-    pid: int,
-    stop: threading.Event,
-    deadline: float,
-) -> tuple[int, str] | None:
-    while not stop.is_set() and time.monotonic() < deadline:
-        try:
-            completed = subprocess.run(
-                [str(py_spy), "dump", "--pid", str(pid), "--locals"],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=8,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            continue
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if MATCH_TERM in output:
-            stop.set()
-            return worker_id, output
-        if "No such process" in output or "os error 87" in output:
-            return None
-    return None
+def run_dump(py_spy: Path, pid: int, *, locals_: bool) -> str:
+    command = [str(py_spy), "dump", "--pid", str(pid)]
+    if locals_:
+        command.append("--locals")
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=8,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
+    return (completed.stdout or "") + (completed.stderr or "")
+
+
+def process_is_gone(output: str) -> bool:
+    lowered = output.lower()
+    return "no such process" in lowered or "os error 87" in lowered
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--duration", type=float, default=120.0)
-    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--duration", type=float, default=300.0)
+    parser.add_argument("--idle-interval", type=float, default=0.5)
+    parser.add_argument("--burst-duration", type=float, default=90.0)
+    parser.add_argument("--burst-interval", type=float, default=0.05)
     parser.add_argument(
         "--output",
         type=Path,
@@ -91,33 +94,56 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.unlink(missing_ok=True)
 
-    print(f"Watching Leapfrog background PID {pid} with {args.workers} read-only samplers.")
+    print(f"Watching Leapfrog background PID {pid} with one low-impact sampler.")
     print("Trigger the automatic-domaining recompute now.", flush=True)
 
-    stop = threading.Event()
-    deadline = time.monotonic() + max(args.duration, 1.0)
-    result: tuple[int, str] | None = None
+    overall_deadline = time.monotonic() + max(args.duration, 1.0)
+    region_seen = False
+    light_samples = 0
 
-    with ThreadPoolExecutor(max_workers=max(args.workers, 1)) as executor:
-        futures = [
-            executor.submit(worker, i + 1, args.py_spy, pid, stop, deadline)
-            for i in range(max(args.workers, 1))
-        ]
-        for future in as_completed(futures):
-            candidate = future.result()
-            if candidate is not None:
-                result = candidate
-                break
+    while time.monotonic() < overall_deadline:
+        output = run_dump(args.py_spy, pid, locals_=False)
+        light_samples += 1
+        if process_is_gone(output):
+            raise SystemExit("The Leapfrog background process exited or restarted.")
+        if REGION_TERM in output or MERGE_TERM in output:
+            region_seen = True
+            print(
+                f"Region growing detected after {light_samples} lightweight samples; "
+                "switching briefly to locals capture.",
+                flush=True,
+            )
+            break
+        time.sleep(max(args.idle_interval, 0.05))
 
-    stop.set()
-    if result is None:
-        print("No merge_domains frame was captured. Re-run and trigger recompute immediately.")
+    if not region_seen:
+        print("Region growing was not observed before the timeout.")
         return 1
 
-    worker_id, output = result
-    args.output.write_text(output, encoding="utf-8")
-    print(f"Captured merge_domains locals with worker {worker_id}: {args.output}")
-    return 0
+    burst_deadline = min(
+        overall_deadline,
+        time.monotonic() + max(args.burst_duration, 1.0),
+    )
+    local_samples = 0
+    while time.monotonic() < burst_deadline:
+        output = run_dump(args.py_spy, pid, locals_=True)
+        local_samples += 1
+        if process_is_gone(output):
+            raise SystemExit("The Leapfrog background process exited or restarted.")
+        if MERGE_TERM in output:
+            args.output.write_text(output, encoding="utf-8")
+            print(
+                f"Captured merge_domains locals after {local_samples} locals samples: "
+                f"{args.output}"
+            )
+            return 0
+        time.sleep(max(args.burst_interval, 0.01))
+
+    print(
+        "Region growing was detected, but no merge_domains frame was captured. "
+        "Leapfrog was left running normally."
+    )
+    return 1
 
 
 if __name__ == "__main__":
