@@ -4,6 +4,10 @@ This uses ``py-spy record`` without locals. Unlike repeated ``dump --locals`` ca
 it samples continuously with much less stop/resume interference and can catch the
 very short second-stage call stack. Run it, then immediately trigger an automatic-
 domaining recompute in Leapfrog.
+
+Pass ``--native`` to include native extension frames. This is useful when the Python
+profile reaches ``SubDomainer.__init__`` but does not expose a Python region-growing
+loop, suggesting that the missing work occurs inside a compiled extension.
 """
 from __future__ import annotations
 
@@ -44,6 +48,11 @@ def main() -> int:
         type=Path,
         default=Path("benchmark-results/leapfrog-real-subdomainer-profile.txt"),
     )
+    parser.add_argument(
+        "--native",
+        action="store_true",
+        help="Include native extension frames in the profile.",
+    )
     parser.add_argument("--py-spy", type=Path, default=default_py_spy())
     args = parser.parse_args()
 
@@ -58,9 +67,10 @@ def main() -> int:
     raw_output.unlink(missing_ok=True)
     args.output.unlink(missing_ok=True)
 
+    mode = " with native frames" if args.native else ""
     print(
         f"Profiling Leapfrog background PID {pid} at {args.rate} Hz for "
-        f"{args.duration} seconds."
+        f"{args.duration} seconds{mode}."
     )
     print("Trigger the automatic-domaining recompute now.", flush=True)
 
@@ -78,6 +88,9 @@ def main() -> int:
         "--output",
         str(raw_output),
     ]
+    if args.native:
+        command.append("--native")
+
     completed = subprocess.run(command, text=True, check=False)
     if completed.returncode != 0:
         raise SystemExit(f"py-spy record failed with exit code {completed.returncode}.")
