@@ -1,11 +1,13 @@
 # Structural LVA prototype
 
 The `feature/structural-lva` branch introduced a native Polatory structural-LVA
-path. The `feature/leapfrog-parity` branch adds exact value preprocessing and
+path. The `feature/leapfrog-parity` branch added exact value preprocessing and
 post-clustering construction recovered from the supplied WolfPass Leapfrog
-benchmark.
+benchmark. The `feature/automatic-subdomainer` branch adds a standalone,
+deterministic geometric-centroid SubDomainer that does not require decoded
+Leapfrog point labels.
 
-## Python API
+## Standalone automatic Python API
 
 ```python
 import numpy as np
@@ -14,6 +16,7 @@ from polatory import three as p3
 
 rbf = p3.CovSpheroidal3([100.0, 400.0])
 model = p3.Model(rbf, 0)
+model.nugget = 0.0
 
 trend_input = polatory.StructuralTrendInput3(
     vertices=mesh_vertices,
@@ -22,17 +25,19 @@ trend_input = polatory.StructuralTrendInput3(
     range=100.0,
 )
 
-# Leapfrog does not fit +/-1 indicators directly.
 value_info = polatory.leapfrog_indicator_values3(points, sdf_indicators)
 
-# labels contains one recovered or externally generated final cluster ID per
-# interpolation point.
-builder = polatory.LabeledStructuralDomainBuilder3(base_range=400.0)
+builder = polatory.AutomaticStructuralDomainBuilder3(
+    centroid_count=6000,
+    minimum_cluster_fraction=0.001,
+    maximum_cluster_fraction=0.10,
+    consistency_threshold=0.60,
+    base_range=400.0,
+)
 domains = builder.build_from_inputs(
     points,
-    labels,
     [trend_input],
-    model_parameters=[100.0, 400.0],
+    model_parameters=np.asarray(model.parameters, dtype=float).tolist(),
 )
 
 structural = polatory.StructuralInterpolant3(
@@ -47,6 +52,35 @@ structural.fit(
     tolerance=value_info.fit_accuracy,
 )
 predictions = structural.evaluate(query_points)
+```
+
+The automatic builder contains no benchmark coordinates, case names, domain
+counts or precomputed point labels. Its pipeline is:
+
+1. factor the requested centroid count into a data-aspect-ratio-aware grid;
+2. sample the structural LVA matrix at every centroid;
+3. connect face-neighbouring grid cells;
+4. greedily merge adjacent cells in decreasing SPD-matrix consistency order;
+5. enforce the requested minimum and maximum core populations;
+6. assign a canonical automatic label to every interpolation point;
+7. pass those labels to `LabeledStructuralDomainBuilder3` for the recovered
+   support, local-range, representative-matrix and bounding-box rules.
+
+The complete runnable example is
+`examples/standalone_automatic_lva.ipynb`.
+
+## Oracle-label Python API
+
+The oracle path remains useful for isolating errors after automatic clustering:
+
+```python
+builder = polatory.LabeledStructuralDomainBuilder3(base_range=400.0)
+domains = builder.build_from_inputs(
+    points,
+    labels,
+    [trend_input],
+    model_parameters=np.asarray(model.parameters, dtype=float).tolist(),
+)
 ```
 
 ## Recovered binary indicator values
@@ -113,7 +147,7 @@ conversion independently of the final meshes.
 
 ## Exactly recovered post-cluster construction
 
-Once the final point labels are known, the local domain construction is now
+Once the final point labels are known, the local domain construction is
 recovered for all 82 domains across the nine WolfPass strength/range cases.
 
 For one cluster with core point index set `C`:
@@ -145,38 +179,36 @@ approximately:
 - blending/culling box: `3.6e-8`;
 - transformed local centres mapped back to input points: `7.0e-10`.
 
-`LabeledStructuralDomainBuilder3` implements these rules. It is deliberately
-separate from automatic clustering so interpolation and blending can be tested
-against Leapfrog without conflating them with the SubDomainer partition.
+`LabeledStructuralDomainBuilder3` implements these rules. The automatic builder
+uses it internally after generating labels, so there is only one implementation
+of the recovered post-cluster rules.
 
-## What remains before full automatic parity
+## Parity status and validation boundary
 
-The remaining unknowns are now limited to:
+The supplied serialized objects preserve final point assignments but not the
+temporary geometric leaf/neighbour queues. The automatic implementation is
+therefore a deterministic reconstruction of the observed 6000-centroid,
+adjacency-constrained architecture, not a copy of hidden Leapfrog source code.
 
-1. Leapfrog's initial geometric mini-cluster grid and deterministic adjacent
-   merge ordering;
-2. the exact local-function blending weight in overlap regions;
-3. the exact relationship between Leapfrog's requested fit accuracy and the
-   stopping behaviour of its approximate FastRBF solver;
+The following items still require empirical regression across independent
+Leapfrog exports before universal exact-parity can be claimed:
+
+1. exact tie-breaking in geometric centroid partition and adjacent merge order;
+2. the exact local-function blend weight in overlap regions;
+3. the relationship between requested fit accuracy and FastRBF stopping;
 4. multiple-input `BLENDING` orientation and strength equations;
 5. global mean trend and compatibility-version interactions.
 
-The former fixed `0.8 * base_range` local range and axis-aligned-box support
-heuristics are not Leapfrog rules and should not be used for parity claims.
-The current `StructuralInterpolant3` box smoothstep weighting also remains an
-experimental approximation until the overlap function is identified.
+Use two separate validation layers:
 
-## Validation strategy
+- **Oracle-label benchmark:** feed decoded final labels to
+  `LabeledStructuralDomainBuilder3`. Remaining mesh difference is caused by the
+  local solver, blending or isosurface extraction.
+- **Automatic benchmark:** generate labels using
+  `AutomaticStructuralDomainBuilder3`, compare partitions first, then compare
+  the final scalar field and surface.
 
-Use two separate benchmarks:
-
-- **Oracle-label benchmark:** feed the decoded final labels to
-  `LabeledStructuralDomainBuilder3`. Any remaining mesh difference is caused by
-  the local solver, blending or isosurface extraction—not clustering or value
-  preprocessing.
-- **Automatic benchmark:** generate labels from the replacement SubDomainer and
-  compare label partitions first, then run the same exact post-cluster builder.
-
-A parity claim requires one unchanged implementation to pass every supplied
-strength/range case, including the 50 m cutoff cases, without case-specific
-parameter tuning.
+A strict parity claim requires one unchanged automatic implementation to pass
+every supplied strength/range case, including the 50 m cutoff cases, without
+case-specific parameter tuning, followed by held-out datasets not used during
+reconstruction.

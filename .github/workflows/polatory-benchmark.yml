@@ -1,0 +1,91 @@
+name: Polatory benchmark lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      surface_resolution:
+        description: "Polatory surface resolution in metres"
+        required: false
+        default: "10"
+  push:
+    branches:
+      - feature/automatic-subdomainer
+
+jobs:
+  build-polatory:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      POLATORY_BENCHMARK_RESOLUTION: ${{ github.event.inputs.surface_resolution || '10' }}
+      PYTHONPATH: ${{ github.workspace }}\benchmarks\headless_shims
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel cmake ninja build
+
+      - name: Bootstrap vcpkg
+        shell: powershell
+        run: |
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Build and install Polatory
+        shell: powershell
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          python -m pip install . --no-build-isolation --force-reinstall
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install scipy scikit-image pandas pyvista PyQt6 matplotlib
+
+      - name: Test Polatory import
+        run: |
+          python -c "import polatory; print('Polatory imported successfully')"
+
+      - name: Download Leapfrog gold benchmark release
+        shell: powershell
+        run: |
+          $archive = "benchmark-data\leapfrog-benchmark-data-v1.zip"
+          $folder = "benchmark-data\leapfrog-benchmark-data-v1"
+          New-Item -ItemType Directory -Force -Path "benchmark-data" | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://github.com/Mining-Geologist/RBF/releases/download/leapfrog-benchmark-data-v1/leapfrog-benchmark-data-v1.zip" `
+            -OutFile $archive
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          Expand-Archive -Path $archive -DestinationPath $folder -Force
+          Get-ChildItem $folder
+
+      - name: Run synthetic structural-LVA suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python benchmarks/leapfrog_blending/run_headless_suite.py
+
+      - name: Run real Leapfrog gold suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LEAPFROG_GOLD_DIR: ${{ github.workspace }}\benchmark-data\leapfrog-benchmark-data-v1
+        run: |
+          python benchmarks/leapfrog_gold/run_real_gold_suite_ci.py
+
+      - name: Upload benchmark meshes, overlays, and metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: polatory-leapfrog-benchmark-results
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
