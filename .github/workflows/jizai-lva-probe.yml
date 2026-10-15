@@ -1,0 +1,45 @@
+name: Jizai LVA API and invariance probe
+on:
+  push:
+    branches: [research/jizai-lva-probe-20261015]
+    paths:
+      - 'ci/jizai_lva_probe.py'
+      - '.github/workflows/jizai-lva-probe.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    env:
+      CC: /usr/bin/gcc-13
+      CXX: /usr/bin/g++-13
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common build-essential cmake ninja-build pkg-config git curl zip unzip tar
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13
+          python -m pip install --upgrade pip setuptools wheel numpy
+      - name: Build Jizai 1.0.0 with verified patches
+        run: |
+          git clone --depth 1 --branch v1.0.0 https://github.com/unageek/jizai.git jizai-src
+          git -C jizai-src submodule update --init --recursive
+          python ci/patch_jizai.py
+          python -m pip install ./jizai-src
+      - name: Run structural API inspection and rigid-transform test
+        run: python ci/jizai_lva_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jizai-lva-api-probe
+          path: |
+            jizai_lva_probe.json
+            jizai_rigid_invariance.csv
+          if-no-files-found: ignore
