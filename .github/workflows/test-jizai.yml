@@ -1,0 +1,55 @@
+name: Test Jizai PyPI
+on:
+  push:
+    branches: [test/jizai-pypi]
+  workflow_dispatch:
+jobs:
+  test-jizai:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config git curl zip unzip tar
+          python -m pip install --upgrade pip setuptools wheel
+      - name: Install Jizai from PyPI
+        run: python -m pip install --verbose jizai
+      - name: Smoke test interpolation and synthetic sphere surface
+        run: |
+          python - <<'PY'
+          import time
+          import numpy as np
+          import jizai as jz
+          print("Jizai imported:", jz.__file__)
+          print("Anisotropy property:", hasattr(jz.Model(jz.Biharmonic3D(dim=3)), "anisotropies"))
+          rng = np.random.default_rng(42)
+          directions = rng.normal(size=(250, 3))
+          directions /= np.linalg.norm(directions, axis=1)[:, None]
+          points = directions * 10.0
+          gen = jz.SdfDataGenerator(points, directions)
+          model = jz.Model(jz.Biharmonic3D(dim=3))
+          interp = jz.Interpolant(model)
+          start = time.monotonic()
+          interp.fit(gen.sdf_points, gen.sdf_values, tolerance=1e-5, accuracy=1e-7)
+          print("Interpolation fit seconds:", round(time.monotonic()-start, 3))
+          bbox = jz.Bbox(np.full(3, -12.0), np.full(3, 12.0))
+          field = jz.RbfFieldFunction(interp, accuracy=1e-7)
+          start = time.monotonic()
+          mesh = jz.Isosurface(bbox, 1.0).generate_from_seed_points(points, field)
+          mesh.export_obj("jizai_sphere.obj")
+          print("Surface extraction seconds:", round(time.monotonic()-start, 3))
+          import os
+          print("OBJ bytes:", os.path.getsize("jizai_sphere.obj"))
+          assert os.path.getsize("jizai_sphere.obj") > 100
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jizai-sphere
+          path: jizai_sphere.obj
+          if-no-files-found: ignore
