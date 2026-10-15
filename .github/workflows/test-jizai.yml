@@ -1,7 +1,7 @@
 name: Test Jizai PyPI
 on:
   push:
-    branches: [test/jizai-pypi]
+    branches: [test/jizai-pypi, fix/jizai-1.0.0-build]
   workflow_dispatch:
 jobs:
   test-jizai:
@@ -23,12 +23,17 @@ jobs:
           which gcc-13 g++-13 ninja cmake
           gcc-13 --version
           cmake --version
-      - name: Install Jizai from PyPI
+      - name: Get upstream Jizai 1.0.0 source and apply isolated patch
+        run: |
+          git clone --depth 1 --branch v1.0.0 https://github.com/unageek/jizai.git jizai-src
+          git -C jizai-src submodule update --init --recursive
+          python ci/patch_jizai.py
+      - name: Build and install patched Jizai 1.0.0
         env:
           CC: /usr/bin/gcc-13
           CXX: /usr/bin/g++-13
           CMAKE_GENERATOR: Ninja
-        run: python -m pip install --verbose jizai
+        run: python -m pip install --verbose ./jizai-src
       - name: Smoke test interpolation and synthetic sphere surface
         run: |
           python - <<'PY'
