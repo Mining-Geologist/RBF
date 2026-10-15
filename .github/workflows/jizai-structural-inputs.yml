@@ -1,14 +1,16 @@
-name: Structural Tensor and Indicator Unit Checks
+name: Structural LVA Components Unit Checks
 on:
   push:
     branches: [research/jizai-lva-baseline-20261015]
     paths:
       - ci/jizai_structural_field.py
       - ci/test_jizai_structural_field.py
+      - ci/jizai_labeled_domains.py
+      - ci/test_jizai_labeled_domains.py
       - .github/workflows/jizai-structural-inputs.yml
   workflow_dispatch:
 jobs:
-  structural-input-regression:
+  structural-component-regression:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -18,9 +20,12 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install numpy
       - run: python ci/test_jizai_structural_field.py
+      - run: python ci/test_jizai_labeled_domains.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: structural-input-regression-results
-          path: jizai_structural_input_test.json
+          name: structural-component-regression-results
+          path: |
+            jizai_structural_input_test.json
+            jizai_labeled_domain_test.json
           if-no-files-found: warn
