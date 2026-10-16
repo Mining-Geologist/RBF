@@ -1,0 +1,26 @@
+name: Structural LVA tensor inversion diagnostics
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - benchmarks/leapfrog_gold/diagnose_structural_tensors.py
+      - .github/workflows/structural-tensor-inversion.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tensor-inversion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install NumPy only
+        run: python -m pip install numpy
+      - name: Verify single-trend inverse and blended tensor signatures
+        run: python benchmarks/leapfrog_gold/diagnose_structural_tensors.py --self-test
