@@ -1,0 +1,26 @@
+name: Offline centroid adjacency validation
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - 'benchmarks/leapfrog_gold/grid_topology_edges.py'
+      - 'benchmarks/leapfrog_gold/test_grid_topology_edges.py'
+      - '.github/workflows/offline-grid-connectivity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-graph-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy
+      - name: Verify unique 6/18/26 voxel adjacency
+        run: python benchmarks/leapfrog_gold/test_grid_topology_edges.py
