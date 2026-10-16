@@ -1,0 +1,30 @@
+name: Offline experimental structural-domain refinement
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - benchmarks/leapfrog_gold/dynamic_domain_refinement.py
+      - benchmarks/leapfrog_gold/test_dynamic_domain_refinement.py
+      - benchmarks/leapfrog_gold/benchmark_dynamic_refinement.py
+      - .github/workflows/offline-dynamic-domain-refinement.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-independent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install only offline numeric dependencies
+        run: python -m pip install numpy scipy scikit-learn
+      - name: Smoke-test unsupervised refinement and rollback safeguards
+        run: python benchmarks/leapfrog_gold/test_dynamic_domain_refinement.py
+      - name: Validate offline benchmark command
+        run: python benchmarks/leapfrog_gold/benchmark_dynamic_refinement.py --help
