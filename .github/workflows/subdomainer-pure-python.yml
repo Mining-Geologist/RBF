@@ -67,4 +67,8 @@ jobs:
             python/src/polatory/leapfrog_automatic_domain_builder_fixed.py
             python/src/polatory/labeled_domain_builder.py
             python/src/polatory/automatic_domain_builder.py
+            benchmarks/leapfrog_gold/analyse_real_stage_dynamic_cluster_merging.py
+            benchmarks/leapfrog_gold/analyse_real_stage_edge_consistency.py
+            benchmarks/leapfrog_gold/analyse_real_stage_oracle_connectivity.py
+            benchmarks/leapfrog_gold/analyse_real_stage_structural_edge_ranking.py
           if-no-files-found: error
