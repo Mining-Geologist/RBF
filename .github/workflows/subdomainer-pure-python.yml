@@ -1,0 +1,70 @@
+name: SubDomainer pure Python validation and research source export
+
+on:
+  push:
+    branches: [research/subdomainer-validation-20261016]
+    paths:
+      - .github/workflows/subdomainer-pure-python.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal numeric dependencies
+        run: python -m pip install numpy
+      - name: Exercise original and corrected merge queue without native Polatory
+        run: |
+          PYTHONPATH=python/src python - <<'PY'
+          import sys,types
+          import numpy as np
+          pkg=types.ModuleType("polatory")
+          pkg.__path__=["python/src/polatory"]
+          sys.modules["polatory"]=pkg
+          native=types.ModuleType("polatory._structural")
+          native.StructuralDomain3=object
+          native.StructuralDomainBuilder3=type("StructuralDomainBuilder3",(),{})
+          native.StructuralTrendType=type("StructuralTrendType",(),{"STRONGEST_ALONG_INPUTS":0,"NON_DECAYING":1})
+          sys.modules["polatory._structural"]=native
+          aux=types.ModuleType("polatory.automatic_domain_builder")
+          aux.AutomaticStructuralDomainDiagnostics3=type("AutomaticStructuralDomainDiagnostics3",(),{})
+          sys.modules["polatory.automatic_domain_builder"]=aux
+          labelled=types.ModuleType("polatory.labeled_domain_builder")
+          labelled.LabeledStructuralDomainBuilder3=type("LabeledStructuralDomainBuilder3",(),{})
+          labelled.sample_single_input_anisotropies3=lambda *args,**kwargs: None
+          sys.modules["polatory.labeled_domain_builder"]=labelled
+          from polatory.leapfrog_automatic_domain_builder import AutomaticStructuralDomainBuilder3 as Previous
+          from polatory.leapfrog_automatic_domain_builder_fixed import AutomaticStructuralDomainBuilder3 as Corrected
+          points=np.column_stack((np.arange(4,dtype=float)+0.5,np.zeros(4),np.zeros(4)))
+          tensor=np.repeat(np.eye(3)[None,:,:],4,axis=0)
+          kwargs=dict(centroid_count=4, minimum_cluster_fraction=.001,
+                      maximum_cluster_fraction=.5, consistency_threshold=.6)
+          for name,constructor in [('previous',Previous),('corrected',Corrected)]:
+              result=constructor(**kwargs)._automatic_labels(
+                  points,tensor,np.array([0.,0.,0.]),np.array([4.,0.,0.]),(4,1,1))
+              labels,centroid_labels,minp,maxp,merged=result
+              print(name,'labels=',labels,'merges=',merged,'final_domains=',len(np.unique(labels)))
+              if name=='corrected':
+                  assert merged==2,(name,merged)
+                  assert len(np.unique(labels))==2
+                  assert labels[0]==labels[1] and labels[2]==labels[3] and labels[0]!=labels[2]
+          print('Pure Python SubDomainer regression PASSED')
+          PY
+      - name: Export existing prototype code for isolated saved-model research
+        uses: actions/upload-artifact@v4
+        with:
+          name: subdomainer-pure-python-sources
+          path: |
+            python/src/polatory/leapfrog_automatic_domain_builder.py
+            python/src/polatory/leapfrog_automatic_domain_builder_fixed.py
+            python/src/polatory/labeled_domain_builder.py
+            python/src/polatory/automatic_domain_builder.py
+          if-no-files-found: error
