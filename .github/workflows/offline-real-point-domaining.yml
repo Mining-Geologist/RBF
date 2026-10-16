@@ -1,0 +1,25 @@
+name: Offline real-point structural domain test
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - benchmarks/leapfrog_gold/real_point_domain_graph.py
+      - benchmarks/leapfrog_gold/test_real_point_domain_graph.py
+      - .github/workflows/offline-real-point-domaining.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy scipy
+      - run: python benchmarks/leapfrog_gold/test_real_point_domain_graph.py
