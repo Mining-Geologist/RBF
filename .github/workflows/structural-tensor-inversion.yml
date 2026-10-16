@@ -6,6 +6,7 @@ on:
     paths:
       - benchmarks/leapfrog_gold/diagnose_structural_tensors.py
       - benchmarks/leapfrog_gold/validate_orientation_saved_domains.py
+      - benchmarks/leapfrog_gold/infer_native_tie_choices.py
       - .github/workflows/structural-tensor-inversion.yml
   workflow_dispatch:
 
@@ -21,9 +22,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install NumPy only
-        run: python -m pip install numpy
-      - name: Verify single-trend inverse and blended tensor signatures
+      - name: Install numeric dependencies
+        run: python -m pip install numpy scipy
+      - name: Verify tensor inverse and blended tensor signatures
         run: python benchmarks/leapfrog_gold/diagnose_structural_tensors.py --self-test
-      - name: Check original-project audit helper syntax
+      - name: Verify inverse tie identifiability controls
+        run: python benchmarks/leapfrog_gold/infer_native_tie_choices.py --self-test
+      - name: Check saved-project audit helper syntax
         run: python -m py_compile benchmarks/leapfrog_gold/validate_orientation_saved_domains.py
