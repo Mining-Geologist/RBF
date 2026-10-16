@@ -7,6 +7,8 @@ on:
       - benchmarks/leapfrog_gold/diagnose_structural_tensors.py
       - benchmarks/leapfrog_gold/validate_orientation_saved_domains.py
       - benchmarks/leapfrog_gold/infer_native_tie_choices.py
+      - benchmarks/leapfrog_gold/trace_merge_stage.py
+      - benchmarks/leapfrog_gold/test_trace_merge_stage.py
       - .github/workflows/structural-tensor-inversion.yml
   workflow_dispatch:
 
@@ -28,5 +30,7 @@ jobs:
         run: python benchmarks/leapfrog_gold/diagnose_structural_tensors.py --self-test
       - name: Verify inverse tie identifiability controls
         run: python benchmarks/leapfrog_gold/infer_native_tie_choices.py --self-test
+      - name: Verify native-independent stage observer
+        run: python benchmarks/leapfrog_gold/test_trace_merge_stage.py
       - name: Check saved-project audit helper syntax
         run: python -m py_compile benchmarks/leapfrog_gold/validate_orientation_saved_domains.py
