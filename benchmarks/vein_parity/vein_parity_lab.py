@@ -203,40 +203,46 @@ class VeinModel:
         return top, bottom, signed
 
     def closed_volume_mesh(self, umin, umax, vmin, vmax, *, nu=65, nv=65, nw=35):
-        """Marching-cubes solid, including pinchout and box-side caps."""
+        """Marching-cubes volume with a negative ghost layer outside clipping box.
+
+        The ghost cells prevent an isosurface lying exactly on an array boundary
+        from leaving a hole in the exported closed mesh.
+        """
         from skimage.measure import marching_cubes
         import trimesh
-        u = np.linspace(umin, umax, nu)
-        v = np.linspace(vmin, vmax, nv)
+        du = (umax-umin)/(nu-1)
+        dv = (vmax-vmin)/(nv-1)
+        u = np.linspace(umin-1.25*du, umax+1.25*du, nu+2)
+        v = np.linspace(vmin-1.25*dv, vmax+1.25*dv, nv+2)
+        nu2, nv2 = len(u), len(v)
         uv = np.stack(np.meshgrid(u, v, indexing="ij"), axis=-1)
-        h, f, _ = self.surfaces(uv)
-        lo = float(np.min(f)-2)
-        hi = float(np.max(h)+2)
+        h, f, signed_gap = self.surfaces(uv)
+        lo = float(min(np.min(f), np.min(h))-2.)
+        hi = float(max(np.max(h), np.max(f))+2.)
         w = np.linspace(lo, hi, nw)
-        # Signed min of four side caps, upper/lower walls; positive = inside.
-        cap = np.minimum.reduce([
-            np.broadcast_to((u[:,None]-umin)[...,None], (nu,nv,nw)),
-            np.broadcast_to((umax-u[:,None])[...,None], (nu,nv,nw)),
-            np.broadcast_to((v[None,:]-vmin)[...,None], (nu,nv,nw)),
-            np.broadcast_to((vmax-v[None,:])[...,None], (nu,nv,nw)),
+        side = np.minimum.reduce([
+            np.broadcast_to((u[:, None]-umin)[..., None], (nu2,nv2,nw)),
+            np.broadcast_to((umax-u[:, None])[..., None], (nu2,nv2,nw)),
+            np.broadcast_to((v[None, :]-vmin)[..., None], (nu2,nv2,nw)),
+            np.broadcast_to((vmax-v[None, :])[..., None], (nu2,nv2,nw)),
         ])
         values = np.minimum.reduce([
-            np.broadcast_to((w[None,None,:]-f[...,None]),(nu,nv,nw)),
-            np.broadcast_to((h[...,None]-w[None,None,:]),(nu,nv,nw)),
-            cap,
+            np.broadcast_to(w[None,None,:]-f[...,None], (nu2,nv2,nw)),
+            np.broadcast_to(h[...,None]-w[None,None,:], (nu2,nv2,nw)),
+            side,
+            np.broadcast_to(signed_gap[...,None]*.5, (nu2,nv2,nw)),
         ])
-        # A nonnegative signed thickness between the surfaces is required.
-        values = np.minimum(values, (h-f)[...,None]*.5)
         if not (np.any(values > 0) and np.any(values < 0)):
             raise ValueError("No positive volumetric vein in supplied box")
-        verts, faces, _, _ = marching_cubes(
-            values.astype(np.float32), level=0,
-            spacing=(u[1]-u[0],v[1]-v[0],w[1]-w[0]))
-        verts += [umin,vmin,lo]
+        verts, faces, _, _ = marching_cubes(values.astype(np.float32),
+                                            level=0,
+                                            spacing=(u[1]-u[0],v[1]-v[0],w[1]-w[0]),
+                                            allow_degenerate=False)
+        verts += [u[0], v[0], lo]
         xyz = self.frame.to_global(verts)
         mesh = trimesh.Trimesh(vertices=xyz, faces=faces, process=True)
         if mesh.volume < 0:
-            mesh.invert()  # normalize orientation so inside volume is positive
+            mesh.invert()
         return mesh
 
 
