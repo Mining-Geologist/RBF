@@ -1,0 +1,27 @@
+name: Offline third-fold holdout reproducer
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - benchmarks/leapfrog_gold/validate_saved_symmetric_holdout.py
+      - .github/workflows/offline-third-fold-reproducer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safe-cli-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy scipy scikit-learn
+      - name: Parse and check stand-alone offline benchmark script
+        run: python -m py_compile benchmarks/leapfrog_gold/validate_saved_symmetric_holdout.py
+      - name: Exercise standalone CLI without private data
+        run: python benchmarks/leapfrog_gold/validate_saved_symmetric_holdout.py --help
