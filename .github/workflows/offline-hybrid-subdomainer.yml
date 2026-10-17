@@ -1,0 +1,32 @@
+name: Offline hybrid structural SubDomainer
+
+on:
+  push:
+    branches: [research/structural-tensor-inversion-20261016]
+    paths:
+      - 'benchmarks/leapfrog_gold/hybrid_real_grid_domainer.py'
+      - 'benchmarks/leapfrog_gold/test_hybrid_real_grid_domainer.py'
+      - 'benchmarks/leapfrog_gold/benchmark_hybrid_real_grid.py'
+      - 'benchmarks/leapfrog_gold/dynamic_domain_refinement.py'
+      - '.github/workflows/offline-hybrid-subdomainer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    name: Hybrid domain tests (no native runtime)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install numeric dependencies
+        run: python -m pip install numpy scipy scikit-learn
+      - name: Validate hybrid merge and domain birth
+        run: python benchmarks/leapfrog_gold/test_hybrid_real_grid_domainer.py
+      - name: Validate benchmark CLI
+        run: python benchmarks/leapfrog_gold/benchmark_hybrid_real_grid.py --help
