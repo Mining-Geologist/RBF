@@ -29,9 +29,9 @@ def make_hole(name, x, y, target=True, *, empty=False, logged_far=False,
                      Interval(7, 13, "WASTE"), Interval(13, 15, "VEIN"),
                      Interval(15, 20, "WASTE")]
     elif target:
-        intervals = [Interval(0, 9+zshift, "WASTE"),
-                     Interval(9+zshift, 11+zshift, "VEIN"),
-                     Interval(11+zshift, 20, "WASTE")]
+        intervals = [Interval(0, 9, "WASTE"),
+                     Interval(9, 11, "VEIN"),
+                     Interval(11, 20, "WASTE")]
     else:
         intervals = [Interval(0, 20, "WASTE")]
     return Hole(name, trace, intervals)
