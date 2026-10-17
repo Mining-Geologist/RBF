@@ -235,6 +235,8 @@ class VeinModel:
         verts += [umin,vmin,lo]
         xyz = self.frame.to_global(verts)
         mesh = trimesh.Trimesh(vertices=xyz, faces=faces, process=True)
+        if mesh.volume < 0:
+            mesh.invert()  # normalize orientation so inside volume is positive
         return mesh
 
 
