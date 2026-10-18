@@ -14,7 +14,7 @@ from scipy.linalg import solve
 
 
 class ReferenceHeightField:
-    def __init__(self, vertices):
+    def __init__(self, vertices, faces=None):
         xyz = np.asarray(vertices, dtype=float)
         if xyz.ndim != 2 or xyz.shape[1] != 3 or len(xyz) < 3:
             raise ValueError("reference mesh vertices must have shape (N,3)")
@@ -30,6 +30,14 @@ class ReferenceHeightField:
         np.minimum.at(zmin, index, xyz[:, 2])
         if np.any(zmax - zmin > 1e-4):
             raise ValueError("Reference is multivalued in XY; use a 3D manifold solver")
+        if faces is not None:
+            tri = np.asarray(faces, dtype=int)
+            if tri.ndim != 2 or tri.shape[1] != 3:
+                raise ValueError("Reference faces must be triangles (F,3)")
+            a,b,c = xyz[tri[:,0],:2],xyz[tri[:,1],:2],xyz[tri[:,2],:2]
+            orient = (b[:,0]-a[:,0])*(c[:,1]-a[:,1]) - (b[:,1]-a[:,1])*(c[:,0]-a[:,0])
+            if np.any(orient > 1e-7) and np.any(orient < -1e-7):
+                raise ValueError("Reference has overturned or folded XY projection; use a true 3D mesh chart")
         self._interp = LinearNDInterpolator(xyz[:, :2], xyz[:, 2], fill_value=np.nan)
         self._nearest = NearestNDInterpolator(xyz[:, :2], xyz[:, 2])
 
@@ -78,8 +86,8 @@ class AffineMultiquadric:
 
 
 class ReferenceRelativeWalls:
-    def __init__(self, reference_vertices, hw_contacts, fw_contacts, shape_m=1.):
-        self.reference = ReferenceHeightField(reference_vertices)
+    def __init__(self, reference_vertices, hw_contacts, fw_contacts, shape_m=1., reference_faces=None):
+        self.reference = ReferenceHeightField(reference_vertices, reference_faces)
         self.raw = {}
         self.offsets = {}
         for wall, controls in (("HW",hw_contacts),("FW",fw_contacts)):
