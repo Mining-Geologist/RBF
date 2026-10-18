@@ -1,0 +1,25 @@
+name: Offline Vein Orientation Identifiability
+on:
+  push:
+    branches:
+      - research/vein-pinchout-parity-20261017
+    paths:
+      - .github/workflows/offline-vein-orientation-identifiability.yml
+      - benchmarks/vein_parity/midpoint_orientation_identifiability.py
+      - benchmarks/vein_parity/test_midpoint_orientation_identifiability.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check numpy scipy trimesh
+      - run: cd benchmarks/vein_parity && python -m unittest -v test_midpoint_orientation_identifiability.py
