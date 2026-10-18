@@ -1,0 +1,25 @@
+name: Offline experimental 3D folded vein reference
+
+on:
+  push:
+    branches: [research/vein-pinchout-parity-20261017]
+    paths:
+      - benchmarks/vein_parity/experimental_fold_reference_sheet.py
+      - benchmarks/vein_parity/test_experimental_fold_reference_sheet.py
+      - .github/workflows/offline-folded-vein-reference.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-fold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy scipy trimesh
+      - run: python benchmarks/vein_parity/test_experimental_fold_reference_sheet.py
