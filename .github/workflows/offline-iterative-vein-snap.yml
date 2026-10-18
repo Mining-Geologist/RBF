@@ -1,0 +1,26 @@
+name: Offline iterative inverse native vein snap
+
+on:
+  push:
+    branches: [research/vein-pinchout-parity-20261017]
+    paths:
+      - benchmarks/vein_parity/invert_asphere_snap_iterative.py
+      - benchmarks/vein_parity/test_invert_asphere_snap_iterative.py
+      - benchmarks/vein_parity/invert_native_asphere_snap.py
+      - .github/workflows/offline-iterative-vein-snap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  geometric-inverse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy scipy trimesh
+      - run: python benchmarks/vein_parity/test_invert_asphere_snap_iterative.py
