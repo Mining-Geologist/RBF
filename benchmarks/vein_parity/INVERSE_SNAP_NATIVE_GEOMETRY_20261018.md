@@ -57,3 +57,23 @@ On the curved saved model, the **original observed HW/FW contact points** are on
 On the end-of-hole and multiple-intersection examples, some contacts lie far outside the represented final wall branch (end-of-hole p95 9–10m), so a 100% snap control does not imply every interpreted 3D point is on the exported final mesh. The high-percentile outliers further limit using their whole input sets as direct kernel-calibration targets.
 
 No RBF fitting was performed for this inversion: all coefficients and scales were frozen from the actual saved native solutions.
+
+## Second-stage improvement: solving the inverse deformation self-consistently
+
+The first-order inverse evaluates final-face normals and the RBF field at final mesh vertices. But the snap mechanism likely evaluates these quantities on the **original, pre-snap wall**, particularly problematic for large deformation and folded geometry.
+
+A new **damped fixed-point iteration** solves the proposed equation `x_base = x_final + polarity*n(x_base)*f(x_base)` using native saved `asphere` coefficients, updated surface normals and updated evaluation coordinates. Each iteration is selected solely by its **internal fixed-point residual**, not by proximity to the saved native centres. The inferred polarity is + for HW and − for FW, matching the project mesh winding. Damping 0.65, up to 24 iterations.
+
+| Case | HW first-order RMSE m | HW iterative RMSE m | FW first-order RMSE m | FW iterative RMSE m |
+|---|---:|---:|---:|---:|
+| Curved | 0.001088 | **0.000021** | 0.001094 | **0.000022** |
+| End of hole | 0.382071 | **0.080131** | 0.642781 | **0.099127** |
+| Multiple intersections | 0.796940 | **0.242117** | 0.950628 | **0.565933** |
+
+RMSE is the nearest point-on-triangulation distance from **saved native RBF centres to the inverse-recovered wall**. This is a *model-internal geometric consistency check*, not an independently exported original wall mesh. It is strong support for the hypothesized normal-displacement correction, but it cannot establish exact native topology/constraints or reconstruct the initial reference/wall surface.
+
+- New independent code: `benchmarks/vein_parity/invert_asphere_snap_iterative.py`.
+- Synthetic known-forward-deformation test: `test_invert_asphere_snap_iterative.py`.
+- GitHub numerical workflow: `.github/workflows/offline-iterative-vein-snap.yml`.
+
+Complex folds can converge only partially or oscillate because triangle normals and correspondence change with deformation; the residual-based stopping rule mitigates but cannot remove these effects.
