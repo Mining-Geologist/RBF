@@ -64,3 +64,18 @@ Separately, saved curved/end-hole/multiple-hit `Solution3` Snap correction objec
 - This experiment's portable research ZIP includes aggregate CSVs and local offline tests for midpoint reference hypothesis, normal vs vertical offsets, and intrinsic Laplacian negative result; none uses native Leapfrog runtime.
 
 **Next most decisive test**: independently recover the precise reference surface generator (orientation + smoothing + translation) from midpoint, structure and model bounds; then fit signed wall offsets and the independently recovered native `asphere` snap field, reconstruct the full meshes without using the saved native reference as an input. For folded and end-of-hole, also recover reference-manifold parameterization and branch association. A no-snap native project would be especially useful to validate pre-snap surface reconstruction, but is not needed to continue static research.
+
+## Further controlled test: replay saved native snapping after independently fitted reference offsets
+
+For the two native models with saved `Solution3` records (curved and end-of-hole), fit *pre-snap* 2D MQ1 offsets using their **native saved RBF centres as geometrical point constraints**; reconstruct an open sheet on the independently recovered native reference mesh, then displace it along the sheet normals using the **frozen native saved 3D asphere centres and coefficients**, following the validated HW/FW polarity. Neither model is fitted to the final native mesh, which is used only for nearest-triangle 3D scoring.
+
+| Geometry and wall | Base sheet 3D native distance RMSE | After saved snap correction |
+|---|---:|---:|
+| Curved HW | 0.0873 m | **0.0677 m** |
+| Curved FW | 0.0922 m | **0.0711 m** |
+| End-of-hole HW | **4.5984 m** | 4.6078 m (regression) |
+| End-of-hole FW | **4.4989 m** | 4.5112 m (regression) |
+
+Interpretation: Stage composition is plausible on the mildly curved reference; simply adding the native snap field does **not** repair the end-of-hole's missing base-surface/branch geometry. This is *not independent from-drilling modelling*: the entire native reference mesh, native pre-snap correction centres and native fitted correction coefficients are supplied as conditioning inputs, and all are absent from the raw drillhole dataset. These 3D nearest-mesh scores are **not the same metric** as vertex-height errors above.
+
+The full local reproducible experiment (including private original reference/control arrays and two saved-solution NPZ files) is in the user-owned download bundle `Vein_Reference_Relative_Investigation_20261018.zip`. No such private benchmark arrays have been added to this public research repository.
