@@ -30,6 +30,12 @@ def run():
         ReferenceHeightField(np.r_[xyz, [[0,0,100]]])
     except ValueError:pass
     else:raise AssertionError("must reject multi-valued folded geometry")
+    square=np.array([[0.,0.,0.],[1.,0.,0.],[1.,1.,0.],[0.,1.,0.]])
+    try:
+        ReferenceHeightField(square, np.array([[0,1,2],[0,3,2]]))
+    except ValueError:pass
+    else:raise AssertionError("must reject overlapping reversed reference face orientation")
+    ReferenceHeightField(square,np.array([[0,1,2],[0,2,3]]))
     print("PASS: exact reference offset recovery, outside reversal, affine control, 3D fold guard")
 
 if __name__=="__main__":
