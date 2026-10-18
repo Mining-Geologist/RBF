@@ -26,7 +26,7 @@ def main():
     flat=fit_robust_reference(nominal)
     assert np.max(np.abs(flat.height(grid)-100.))<1e-8
     # Four extreme end-of-hole points, including one dual-valued XY site.
-    hole=np.delete(nominal,[6,8,12],axis=0)
+    hole=np.delete(nominal,[7,12,17],axis=0)
     hole=np.vstack([hole, [[-40.,0.,196.],[40.,0.,4.],
                            [0.,0.,1.],[0.,0.,198.]]])
     robust=fit_robust_reference(hole)
