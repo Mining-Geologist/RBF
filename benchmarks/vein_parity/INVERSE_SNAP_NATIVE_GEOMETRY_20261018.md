@@ -1,0 +1,51 @@
+# Inverting the native vein HW/FW snap fields: quantitative recovery (2026-10-18)
+
+Scope: read-only, offline reconstruction from the user's saved Leapfrog Geo 2026.1 project. No running Leapfrog software, no licensing/network interaction, no proprietary source or binary checked into this public repository.
+
+## What is established
+
+The saved **three non-planar vein cases** contain two native FastRBF `Solution3` records (HW and FW): basis `asphere`, range parameter 10m, degree -1, RBF coefficients and 3D centres. Their evaluation is independently reproduced by the same piecewise `asphere` formula used in `replay_saved_asphere.py`.
+
+**New inverse-snap numerical test**: for each saved final HW/FW mesh vertex `v`, evaluate saved native RBF `f(v)`, take normalized final vertex normal `n(v)`, and estimate pre-snap position `v_original = v + f(v)n(v)` for HW, or `v_original = v - f(v)n(v)` for FW (the native wall triangle normals have opposite side orientation conventions). This is a first-order inversion; original pre-snap normals are not preserved.
+
+For each case, compare the 3D Euclidean point-to-triangle distance from the native **saved RBF centres** to (i) final mesh, (ii) inverse-corrected mesh, and (iii) deliberately wrong-polarity control mesh. Those centres were not fitted by our inverse algorithm and are part of the user-owned saved native model.
+
+| Geometry | Wall | Final mesh distance RMSE m | Correct inverse RMSE m | Opposite direction RMSE m | Recovered distance median m |
+|---|---|---:|---:|---:|---:|
+| Curved | HW | 0.097174 | **0.001088** | 0.193251 | 0.000357 |
+| Curved | FW | 0.096724 | **0.001094** | 0.192344 | 0.000481 |
+| End-of-hole | HW | 1.555021 | **0.382071** | 2.613496 | 0.01913 |
+| End-of-hole | FW | 1.415054 | **0.642781** | 2.609972 | 0.02771 |
+| Multiple intersections | HW | 2.211531 | **0.796940** | 3.682642 | 0.161455 |
+| Multiple intersections | FW | 2.218623 | **0.950628** | 3.557609 | 0.191453 |
+
+The curved model's RBF centres lie within about **1 mm RMSE of the inverse-corrected mesh**; reversed signs worsen the fit by ~2x. This is compelling direct geometric evidence that the saved `asphere` field encodes **contact-to-surface normal displacements / snap correction**. End-hole and folded cases improve but are not reproduced exactly using final-face vertex normals; local reference geometry and nonlinear/large displacement may matter.
+
+`Hangingwall_Display` and `Hangingwall_Interpolated` have different triangulation sizes but **identical geometric support** within numeric precision for all six test scenarios, as do the two FW meshes. They are not separate unsnapped/snap reference surfaces.
+
+## Experimental reconstruction of initial wall-offset field
+
+Using native saved RBF centres as *proxy base-wall points* (not ordinary drilling inputs), project their coordinates and recovered pre-snap wall vertices onto the saved reference mesh; assign signed normal distances to each. Fit an independent scalar reference-offset RBF using projected 3D reference coordinates. This is a research diagnostic and does not recover exact native `init_from_mesh_and_points` implementation.
+
+A sweep of linear distance, first-order multiquadric, compact spherical, saved asphere and exponential kernels with range 1/10/50/150/300/650/1000m, degree 0 and 1, found:
+- Curved model: best mean HW/FW signed-offset RMSE around **0.050 m** using MQ1 with ~10m scale and degree 0; conventional spherical 300m degree 0 about 0.055m.
+- Multiple intersections: about **2.55m** best mean signed-offset RMSE among candidates (exponential R1000, degree 0).
+- End-of-hole: about **15.26m** best mean signed-offset RMSE among candidates (MQ1 R50, degree 1). The large extreme deviations indicate reference projection / branch matching / conformity needs reconstruction, and should not be presented as satisfactory models.
+
+The experiment fits *saved intermediate RBF centres* and validates against the first-order inverse mesh; it is **not a blinded out-of-sample test of the complete vein algorithm**. The native original reference-surface construction, conformal projection and initial HW/FW surface interpolation remain unverified.
+
+## Implementation / CI
+
+- Independently authored inverse operation: `benchmarks/vein_parity/invert_native_asphere_snap.py`.
+- Synthetic polarity/shape tests: `benchmarks/vein_parity/test_invert_native_asphere_snap.py`.
+- CI: `.github/workflows/offline-inverse-vein-snap.yml`.
+- User-facing reproduction kit has original Python evaluator against owner-provided NPZ inputs, six recovered pre-snap OBJ meshes and numerical tabulation. User benchmark raw arrays are not committed to public GitHub.
+- New private static Ghidra audit focuses on `PySurfaceOffsetInterpolant.init_from_mesh_and_points`: https://github.com/Mining-Geologist/LF_SC/actions/workflows/ghidra-vein-offset-survey.yml.
+
+## Limits of confidence
+
+1. Snap field identity `asphere`, parameters and geometric displacement **strongly confirmed for these three saved native `Solution3` cases**.
+2. Mesh-normal inverse is an approximation, exact only for sufficiently small displacement over smooth geometry.
+3. `init_from_mesh_and_points` is a separate native operation; Ghidra method labels alone are not mathematical equations.
+4. Flat and pinchout models do not persist these snap `Solution3` records, so none of these tests identifies the first-stage pinchout wall interpolation kernel.
+5. Before commercial implementation, validate mesh interactions, constraints and snapping options with distinct datasets, and respect software licence/interoperability conditions.
