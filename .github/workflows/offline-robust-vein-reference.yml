@@ -1,0 +1,26 @@
+name: Offline robust reference midpoint falsification
+
+on:
+  push:
+    branches: [research/vein-pinchout-parity-20261017]
+    paths:
+      - benchmarks/vein_parity/robust_midpoint_reference.py
+      - benchmarks/vein_parity/test_robust_midpoint_reference.py
+      - .github/workflows/offline-robust-vein-reference.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-pointcloud-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install numpy scipy
+      - name: Verify outlier-resistance, fold rejection, and affine reference invariance
+        run: python benchmarks/vein_parity/test_robust_midpoint_reference.py
