@@ -48,3 +48,31 @@ Neither this project-graph audit nor the earlier 2D TPS study proves native refe
 **Priority next experiment:** controlled reference-only perturbations in owner-operated Leapfrog (same drillhole midpoint cloud, modify bounding domain and/or wall contact thickness separately); export references after each change. If the midpoint cloud is fixed but the reference changes after changing the wall contact geometry alone, that directly demonstrates a wall-dependent path. If a bounding-only change modifies only cropping rather than local surface shape, constrain the boundary dependency to clipping/meshing. A single saved project snapshot cannot discriminate these behaviors. Any such runtime experiment needs the owner's authorized installation; do not claim one was run.
 
 Related notes: `STRIKE_ALIGNED_2D_REFERENCE_20261018.md`, `NATIVE_REFERENCE_INPUTS_ROBUST_FIT_20261018.md`, `NATIVE_SAVED_ASPHERE_CONFIRMATION_20261018.md`.
+
+## 5. Follow-up native DAG verification (later 2026-10-18)
+
+A new read-only, `pickletools.genops`-based audit parsed all six reference blocks and all **twelve** saved `VeinWallPointsGeneratorBlock` objects. Each reference block's persisted `_inputs` contains exactly **two upstream blocks**, a `MergedLocationsBlock` and a `FaultBlockBoundaryBlock`. Each is consumed by two generators: one `is_pinch_out=False`, one `is_pinch_out=True`. All six reference blocks have `hw_points=None` and `fw_points=None`. The ordinary generator declares the reference, vein segments, legend, and boundary as inputs. Its `VeinWallPointsBlock` output is later merged into the raw vein. This is independently checked across all six cases, not an assumption from naming.
+
+| Reference | Midpoints | Model boundary | Ordinary points generator | Pinchout generator |
+|---:|---:|---:|---:|---:|
+|2553|2549|2307|2556|2564|
+|3060|3056|2853|3063|3071|
+|3359|3515|3353|3527|3528|
+|4053|4049|3846|4056|4064|
+|4554|4550|4336|4557|4565|
+|5044|5040|4837|5047|5055|
+
+**Critical algorithmic implication:** The persisted graph places *default reference construction before wall-contact point generation*. An implementation computing the default reference as the average of **final** native HW/FW meshes has a dependency-order conflict with these saved cases. The `raw_vein` parent pointer remains present and may permit indirect access to other geology/wall context, so the graph **does not** prove every runtime input or contradict the official high-level help wording about HW/FW surfaces contributing to best fit.
+
+### Additional mesh and outlier checks
+
+- 202/219 native `05_END_OF_HOLE` reference XY vertices (**92.2374%**) coincide to four decimal places with native `03_CURVED_VARIABLE_THICKNESS` XY vertices. This supports a fixed/common meshing lattice at 20m reference resolution but does not determine whether the underlying interpolant is 2D or 3D.
+- The `05_END_OF_HOLE` setting `include_midpoints_at_hole_ends` is explicitly `true`. The extreme Z=1,4,196,198m inputs are in its saved 26-point midpoint collection; they cannot simply be declared automatically excluded based on the manual's OFF-setting behavior. The reference is bounded Z95.504–104.150m. Robust smoothing / topology handling / further unexposed input selection remain plausible.
+
+### Private Git LFS archive and PE scan
+
+The actual 51,875,416-byte `Leapfrog.zpa` object was successfully downloaded through Git LFS on an **isolated private research branch**; SHA-256 `9d84a9739e3a93fc36db41edf68c4a4b52505e62d3d2de3b1cf42d901feacb98`. Its initial bytes are nonstandard, it is not a ZIP archive, and none of `VeinReferenceSurfaceBlock`, `vein_blocks.reference_surface`, or `PySurfaceOffsetInterpolant` occurs as plaintext. This is negative evidence for *direct plaintext search*, not proof of encryption. See [private archive audit run](https://github.com/Mining-Geologist/LF_SC/actions/runs/39143115369).
+
+A separate [private native PE scan](https://github.com/Mining-Geologist/LF_SC/actions/runs/39143301361) restored `geoengine.core.dll`, `geoengine.map.dll`, `geoengine.interoperability.dll`, and `mesh_processing.pyd`. Its candidate symbols point primarily to Geosoft viewer/reference-plane facilities and generic RBF/geometric support. No verified native default vein-reference constructor was found. These strings must **not** be misidentified as Leapfrog vein implementation.
+
+The complete read-only auditor, JSON output, owner-local OBJ comparison script, and expanded methods report were delivered in the conversation package `Leapfrog_Vein_Reference_DAG_Audit_20261018.zip`. Proprietary input bytes and native DLLs remain outside the public repository. `main` has not been changed.
