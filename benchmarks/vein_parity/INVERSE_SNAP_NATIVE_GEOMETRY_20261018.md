@@ -49,3 +49,11 @@ The experiment fits *saved intermediate RBF centres* and validates against the f
 3. `init_from_mesh_and_points` is a separate native operation; Ghidra method labels alone are not mathematical equations.
 4. Flat and pinchout models do not persist these snap `Solution3` records, so none of these tests identifies the first-stage pinchout wall interpolation kernel.
 5. Before commercial implementation, validate mesh interactions, constraints and snapping options with distinct datasets, and respect software licence/interoperability conditions.
+
+## Independent contact-to-wall cross-check
+
+On the curved saved model, the **original observed HW/FW contact points** are on the final native wall meshes (both median and 95th percentile distance = 0m within numerical tolerance). After reversing the exact native RBF field, their median distance from the recovered pre-snap meshes becomes **0.06824m HW** / **0.08079m FW**, with 95th percentiles **0.16689m** / **0.17329m**. This is the expected direction: the native saved RBF moves the original base wall towards contact observations.
+
+On the end-of-hole and multiple-intersection examples, some contacts lie far outside the represented final wall branch (end-of-hole p95 9–10m), so a 100% snap control does not imply every interpreted 3D point is on the exported final mesh. The high-percentile outliers further limit using their whole input sets as direct kernel-calibration targets.
+
+No RBF fitting was performed for this inversion: all coefficients and scales were frozen from the actual saved native solutions.
