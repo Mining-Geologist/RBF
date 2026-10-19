@@ -1,0 +1,23 @@
+name: Offline folded reference contact orientation
+on:
+  push:
+    branches:
+      - research/vein-pinchout-parity-20261017
+    paths:
+      - 'benchmarks/vein_parity/reference_contact_orientation_audit.py'
+      - 'benchmarks/vein_parity/test_reference_contact_orientation_audit.py'
+      - '.github/workflows/offline-folded-reference-contact-orientation.yml'
+  workflow_dispatch:
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install open source dependencies
+        run: python -m pip install numpy scipy trimesh
+      - name: Test folded reference orientation classifier
+        working-directory: benchmarks/vein_parity
+        run: python -m unittest -v test_reference_contact_orientation_audit.py
