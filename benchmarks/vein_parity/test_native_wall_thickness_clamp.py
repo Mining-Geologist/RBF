@@ -28,6 +28,13 @@ class TestWallThickness(unittest.TestCase):
         np.testing.assert_allclose(h,[104,100])
         np.testing.assert_allclose(f,[96,101])
 
+    def test_reversed_gap_unchanged_by_positive_maximum_only(self):
+        # Mathematical property relevant to wall inversion: upper-lower < 0
+        # remains negative when minimum is disabled.
+        h,f=clamp_signed_wall_thickness(96.,104.,maximum=10.)
+        self.assertAlmostEqual(float(h),96.)
+        self.assertAlmostEqual(float(f),104.)
+
     def test_rejects_invalid_bounds(self):
         with self.assertRaises(ValueError):
             clamp_signed_wall_thickness(1.,0.,minimum=10.,maximum=5.)
