@@ -68,7 +68,7 @@ def inspect_reference(g, reference_oid, max_hops=2):
         }
         if role=="reference":
             item["known_attributes"]={
-                key:g.field_oid(oid,key)
+                key:g.attr(oid,key)
                 for key in ("points","hw_points","fw_points","raw_vein",
                             "custom_mesh","face_dip_values","dip_azimuth_values")
             }
@@ -80,7 +80,7 @@ def inspect_reference(g, reference_oid, max_hops=2):
             # in _inputs; inspecting it explicitly is non-causal and flagged.
             if role=="reference":
                 for name in ("points","raw_vein"):
-                    v=g.field_oid(oid,name)
+                    v=g.attr(oid,name)
                     if v in g.classes:
                         pending.append((v,hop+1,"attribute '"+name+"' of "+str(oid)))
     return {"reference_oid":reference_oid,"visited_objects":discovered,
