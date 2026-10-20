@@ -37,3 +37,16 @@ The owner has a private reproducibility bundle `Leapfrog_Folded_Reference_Upstre
 **Main research direction:** find the upstream `engine.vein_blocks.reference_surface.VeinReferenceSurfaceBlock` builder implementation or isolate directional tie-breaking by an XYZ reflection/rotation native test with identical segment topology. The owner's commercial packaged application uses a separate high-entropy `Leapfrog.zpa` with embedded Zippy loader metadata; its plaintext contents are not publicly known.
 
 No main branches modified.
+
+
+## Extra audit: **entire geology input** is Y-mirror symmetric
+
+A further independent comparison of the original synthetic collar, survey and interval CSVs, after joining numeric geology rows back to XY collar positions, showed:
+- all **25 of 25** collar locations have a reflected matching collar at `(x,-y,z)`;
+- all **55 of 55** logged geology intervals have a reflected identical record, matching X, reflected Y, from-depth, to-depth and categorical lithology;
+- **50** survey records describe vertical drillholes (same survey values after relabeling).
+- Yet the 349-vertex native folded reference differs strongly from its own Y-reflection: the exact nearest native triangle distance from mirror-transformed native vertices has **mean 43.6645m; RMS 62.3625m** (and 132.98m at the 95th percentile). Those numbers are a one-way sampled vertex-to-triangle comparison, not a bidirectional Hausdorff distance.
+
+This is stronger than midpoint-cloud symmetry: the **saved geological input itself** is symmetric as a spatial multiset, while the constructed reference is not. Accordingly a purely mirror-equivariant unique geometric fit to unordered geologic observations plus this symmetric model box cannot yield the observed native sheet *without some other symmetry-breaking implementation convention*. Viable mechanisms include hole-ID or stable-order sorting, coordinate-aligned init/tessellation tie-breaking, surface winding rules, or hidden derived topological connection assumptions. The latest native input attributes don't explicitly identify which one.
+
+An owner-only controlled dataset `Leapfrog_Folded_Vein_HoleID_Ordering_Control_20261020.zip` contains two CSV suites with the same numerical collar/survey/geology geometry and row ordering, differing **only** in the hole-ID assignments: IDs enumerated in forward versus reverse Y/X position order. The zipped datasets were validated by joining every numeric record to collars and comparing canonical sorted tuples. The native vendor program has NOT been run on these two new test cases; only user-run native regeneration could determine whether ID ordering changes handedness.
