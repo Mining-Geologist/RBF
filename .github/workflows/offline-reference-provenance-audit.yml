@@ -1,0 +1,22 @@
+name: Offline native vein reference input provenance tests
+on:
+  push:
+    branches:
+      - research/vein-pinchout-parity-20261017
+    paths:
+      - 'benchmarks/vein_parity/native_reference_dag_audit.py'
+      - 'benchmarks/vein_parity/reference_input_provenance_audit.py'
+      - 'benchmarks/vein_parity/test_reference_input_provenance_audit.py'
+      - '.github/workflows/offline-reference-provenance-audit.yml'
+  workflow_dispatch:
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run static project metadata traversal tests
+        working-directory: benchmarks/vein_parity
+        run: python -m unittest -v test_reference_input_provenance_audit.py
