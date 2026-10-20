@@ -20,7 +20,7 @@ OUTER=np.array([(x,y) for x in (-80,-40,0,40,80) for y in (-80,-40,0,40,80)
 def predict_piecewise_linear(triangulation, vertex_values, query_xy):
     sample=np.asarray(query_xy,float).reshape(-1,2)
     ids=triangulation.find_simplex(sample)
-    if (ids.min()<0: raise ValueError("A query lies outside the synthetic mesh")
+    if (ids.min()<0): raise ValueError("A query lies outside the synthetic mesh")
     local=sample-triangulation.transform[ids,2]
     uv=np.einsum('nij,nj->ni',triangulation.transform[ids,:2],local)
     bary=np.column_stack([uv,1-uv.sum(axis=1)])
