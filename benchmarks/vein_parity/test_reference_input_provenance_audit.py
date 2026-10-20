@@ -22,7 +22,7 @@ class FakeGraph:
             4336:ops({"plane_normal":[0,0,1],"boundary_filter":True})
         }
     def inputs(self,oid):return {4554:[4550,4336]}.get(oid,[])
-    def field_oid(self,oid,name):
+    def attr(self,oid,name):
         return {("4554","points"):4550}.get((str(oid),name))
 
 
