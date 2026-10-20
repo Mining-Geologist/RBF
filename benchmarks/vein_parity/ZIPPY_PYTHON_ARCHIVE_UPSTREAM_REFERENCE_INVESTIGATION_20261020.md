@@ -32,6 +32,14 @@ Private run **39353072222** scanned a dozen additional geometry modules, includi
 
 **Still unresolved:** the AUTOMATIC curved/folded reference builder's generation from input midpoints/contact topology/boundary and the initial handedness. Reversing raw CSV row order was previously invariant; midpoint cloud has Y-reflection symmetry whereas the native final mesh is asymmetric. No numerical claim of kernel parity or algorithm identity is made.
 
+## Critical correction: official input semantics are broader than the saved direct DAG
+
+The vendor's **Leapfrog Geo 2026.1 Veins** help explicitly states that the drilling-based *initial reference surface* is a best-fit surface using **midpoints and hangingwall/footwall surfaces** (https://help.seequent.com/Geo/2026.1/en-GB/Content/geo-models/veins.htm). Our saved-project static graph exposes `MergedLocationsBlock` and model boundary as direct inputs and shows no individual `hw_points`/`fw_points` fields on `VeinReferenceSurfaceBlock`, but these *direct saved fields do not exhaust every possible input and feedback path*. In particular, `raw_vein` or the midpoint generator may carry structural information not shown in the field list.
+
+Therefore the prior implicit assumption that the native reference is necessarily a function **only of an unordered XYZ midpoint cloud** is not established. The symmetric 15-midpoint geometric identifiability result is mathematically valid *for midpoint-only estimators*, but it cannot rule out a proprietary joint fit to wall/structural inputs. A folded reference with Y-asymmetry is quite possible if an unobserved orientation/ordering input is present.
+
+**High-value empirical discriminator:** hold the exact same midpoint XYZ, boundary and mesh resolution; modify HW/FW geological polarity or surface input (without moving contacts), then regenerate and export the reference. If it changes, there is a causal upstream path that the saved direct reference input graph does not currently expose. If unchanged, investigate deterministic orientation and topology tie breaking in the Python constructor.
+
 ## Next high-information step
 
 Inspect the owner's original synthetic `04_MULTIPLE_INTERSECTIONS` project with `reference_input_provenance_audit.py` to map the ACTUAL persisted upstream merged-location and boundary configuration, not just generic field names. This remains unrun in the current container because the owner's original .aproj backing file is not accessible in the active model runtime, and the private binary repository does not contain that project.
