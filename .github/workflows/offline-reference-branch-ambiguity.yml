@@ -1,0 +1,23 @@
+name: Offline reference sheet ambiguity
+on:
+  push:
+    branches:
+      - research/vein-pinchout-parity-20261017
+    paths:
+      - 'benchmarks/vein_parity/reference_branch_ambiguity.py'
+      - 'benchmarks/vein_parity/test_reference_branch_ambiguity.py'
+      - '.github/workflows/offline-reference-branch-ambiguity.yml'
+  workflow_dispatch:
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install numerical dependency
+        run: python -m pip install numpy
+      - name: Check distinct folded branches and edge-vertex ambiguity
+        working-directory: benchmarks/vein_parity
+        run: python -m unittest -v test_reference_branch_ambiguity.py
