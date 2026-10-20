@@ -1,0 +1,26 @@
+name: Offline frozen linear RBF mesh-resolution control
+on:
+  push:
+    branches:
+      - research/vein-pinchout-parity-20261017
+    paths:
+      - 'benchmarks/vein_parity/linear_rbf_mesh_resolution_experiment.py'
+      - 'benchmarks/vein_parity/test_linear_rbf_mesh_resolution_experiment.py'
+      - '.github/workflows/offline-linear-rbf-resolution-control.yml'
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install numpy scipy
+      - name: Verify math and monotonic resolution improvement
+        working-directory: benchmarks/vein_parity
+        run: python -m unittest -v test_linear_rbf_mesh_resolution_experiment.py
+      - name: Record numerical comparison
+        working-directory: benchmarks/vein_parity
+        run: python linear_rbf_mesh_resolution_experiment.py
